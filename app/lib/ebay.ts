@@ -361,7 +361,6 @@ export async function createOffer(
       headers: {
         Authorization:              `Bearer ${userToken}`,
         "Content-Type":             "application/json",
-        "Content-Language":         "en-US",
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
       },
       body: JSON.stringify(body),
