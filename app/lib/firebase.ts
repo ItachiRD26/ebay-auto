@@ -23,10 +23,10 @@ export const COLLECTIONS = {
 export const DEFAULT_SETTINGS = {
   // Pricing filters
   minPrice: 15,
-  maxPrice: 80,
+  maxPrice: 150,
   markupPercent: 40,
   // Sales filter
-  minSoldCount: 20,
+  minSoldCount: 2,
   // Margin
   minMarginPercent: 30,
   // Listing

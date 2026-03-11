@@ -7,9 +7,9 @@ import { Settings } from "@/types";
 
 const DEFAULTS: Settings = {
   minPrice: 15,
-  maxPrice: 80,
+  maxPrice: 150,
   markupPercent: 40,
-  minSoldCount: 20,
+  minSoldCount: 2,
   minMarginPercent: 30,
   defaultStock: 10,
   ebayMarketplace: "EBAY_US",

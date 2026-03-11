@@ -88,7 +88,26 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      alert(`✅ Importados: ${data.added} | Duplicados: ${data.skipped} | Errores: ${data.errors}`);
+
+      // Build a detailed result message
+      let msg = `✅ Importados: ${data.added}  |  ⚠️ Duplicados: ${data.skipped}`;
+
+      if (data.filtered > 0) {
+        msg += `
+🔍 Filtrados (${data.filtered}):`;
+        (data.filterLog as string[])?.forEach((l) => { msg += `
+  • ${l}`; });
+      }
+
+      if (data.errors > 0) {
+        msg += `
+
+❌ Errores (${data.errors}):`;
+        (data.errorLog as string[])?.forEach((l) => { msg += `
+  • ${l}`; });
+      }
+
+      alert(msg);
       setActiveTab("pending");
     } catch (err: unknown) {
       alert("Error: " + (err instanceof Error ? err.message : String(err)));
