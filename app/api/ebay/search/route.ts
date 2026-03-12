@@ -76,6 +76,16 @@ const EXCLUDED_KEYWORDS = [
   "subaru","mazda","mitsubishi","kia","acura","genesis","alfa romeo","bentley","rolls royce",
   // General brand protection
   "replica","counterfeit","fake","gun","firearm","ammo","ammunition","rifle","pistol",
+  // Spare parts & electronics components
+  "pump","diaphragm","impeller","valve","compressor","capacitor","resistor","transistor",
+  "motherboard","circuit","pcb","ic chip","relay","solenoid","actuator","servo",
+  "replacement part","spare part","repair kit","oem","aftermarket","compatible with",
+  "for model","series part","assembly kit","wiring harness","fuse","transformer",
+  "power supply","inverter","regulator","heat sink","thermal paste","solder",
+  "connector","terminal","fitting","coupling","manifold","nozzle","gasket","seal",
+  // Medical / personal health devices
+  "catheter","incontinence","colostomy","stoma","dialysis","surgical",
+  "hearing aid","cpap","nebulizer","syringe","insulin",
   // Food & Plants (cannot dropship)
   "food","snack","candy","chocolate","coffee beans","tea leaves","protein powder",
   "supplement","vitamin","seeds","plant","succulent","cactus","flower bouquet",
