@@ -57,41 +57,56 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [searching]);
 
-  const handleSearch = async (keywords: string) => {
+  const handleSearch = async (keywords: string, isAuto = false) => {
     setSearching(true);
     try {
-      const res = await fetch("/api/ebay/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keywords, limit: 30 }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setActiveTab("pending");
-    } catch (err: unknown) {
-      alert("Error: " + (err instanceof Error ? err.message : String(err)));
+      if (isAuto) {
+        // Fetch keyword list from server
+        const kwRes = await fetch("/api/ebay/search");
+        const { keywords: allKws } = await kwRes.json() as { keywords: string[] };
+        const reversed = [...allKws].reverse();
+
+        // Init progress
+        setSearchProgress({ reviewed: 0, passed: 0, published: 0, failed: 0, keyword: "", keywords: { done: 0, total: reversed.length } });
+
+        for (let i = 0; i < reversed.length; i++) {
+          const kw = reversed[i];
+          setSearchProgress(p => p ? { ...p, keyword: kw, keywords: { done: i, total: reversed.length } } : p);
+          try {
+            await fetch("/api/ebay/search", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ keywords: kw, autoSearch: true }),
+            });
+          } catch (e) {
+            console.warn(`Keyword "${kw}" failed:`, e);
+          }
+          // Poll progress after each keyword
+          try {
+            const sp = await fetch("/api/ebay/search-status").then(r => r.json());
+            if (sp.active) setSearchProgress(sp);
+          } catch {}
+          setSearchProgress(p => p ? { ...p, keywords: { done: i + 1, total: reversed.length } } : p);
+          await loadProducts();
+        }
+      } else {
+        await fetch("/api/ebay/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ keywords, limit: 50 }),
+        });
+        await loadProducts();
+      }
     } finally {
       setSearching(false);
+      setSearchProgress(null);
     }
-  };
+  };;
 
   const handleAutoSearch = async () => {
-    setSearching(true);
-    try {
-      const res = await fetch("/api/ebay/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ autoSearch: true }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setActiveTab("pending");
-    } catch (err: unknown) {
-      alert("Error: " + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setSearching(false);
-    }
-  };
+    await handleSearch("", true);
+    await loadProducts();
+  };;
 
   const handleImport = async (urls: string[]) => {
     setSearching(true);

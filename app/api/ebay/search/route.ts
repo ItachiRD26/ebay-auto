@@ -3,7 +3,7 @@ import { searchProducts, getUserToken } from "@/lib/ebay";
 import { db, COLLECTIONS } from "@/lib/firebase";
 import { QueueProduct } from "@/types";
 import { publishProductById, markPublishFailed } from "@/lib/publish";
-import { resetProgress, updateProgress, endProgress } from "@/lib/search-progress";
+import { updateProgress, endProgress } from "@/lib/search-progress";
 
 // ─── Dropshipping config ──────────────────────────────────────────────────────
 const CONFIG = {
@@ -380,6 +380,10 @@ async function processItem(
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
+export async function GET() {
+  return NextResponse.json({ keywords: AUTO_KEYWORDS });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -387,10 +391,6 @@ export async function POST(req: NextRequest) {
 
     let totalAdded = 0;
     let totalPublished = 0;
-
-    // Init progress tracking
-    const isAuto = !!body.autoSearch;
-    resetProgress(isAuto ? AUTO_KEYWORDS.length : 1);
 
     // Get user token for auto-publishing
     const tokenDoc = await db.collection("tokens").doc("ebay_user").get();
@@ -413,64 +413,35 @@ export async function POST(req: NextRequest) {
       }
     };
 
-    if (autoSearch) {
-      console.log(`\n🔄 Auto-búsqueda — ${AUTO_KEYWORDS.length} keywords`);
-      console.log(`📋 $${CONFIG.MIN_PRICE}-$${CONFIG.MAX_PRICE} | min ${CONFIG.MIN_SOLD_30D} ventas/30d | China only\n`);
+    // Single keyword search (frontend loops for auto-search)
+    const kw = keywords || "";
+    if (!kw) return NextResponse.json({ error: "keywords required" }, { status: 400 });
 
-      for (const kw of [...AUTO_KEYWORDS].reverse()) {
-        try {
-          updateProgress({ keyword: kw });
-          console.log(`\n🔑 "${kw}"`);
-          let result: { itemSummaries?: unknown[] };
-          try {
-            result = await searchProducts(kw, 20);
-          } catch (searchErr) {
-            console.warn(`[search] ⚠️ Skipping keyword "${kw}":`, searchErr instanceof Error ? searchErr.message : searchErr);
-            continue;
-          }
-          const items  = (result.itemSummaries ?? []) as Record<string, unknown>[];
-          console.log(`   ${items.length} items`);
+    console.log(`\n🔍 Búsqueda: "${kw}"`);
+    updateProgress({ keyword: kw });
 
-          for (const item of items) {
-            const productId = await processItem(item, kw);
-            if (productId) {
-              totalAdded++;
-              const sp = (await import("@/lib/search-progress")).getSearchProgress();
-              updateProgress({ passed: sp.passed + 1 });
-              await autoPublish(productId);
-            }
-            await new Promise((r) => setTimeout(r, 3000)); // 3s between listings
-          }
+    let result: { itemSummaries?: unknown[] };
+    try {
+      result = await searchProducts(kw, 20);
+    } catch (searchErr) {
+      const msg = searchErr instanceof Error ? searchErr.message : String(searchErr);
+      console.warn(`[search] ⚠️ Failed "${kw}":`, msg);
+      endProgress();
+      return NextResponse.json({ error: msg }, { status: 500 });
+    }
 
-          updateProgress({ keywords: { done: (await import("@/lib/search-progress")).getSearchProgress().keywords.done + 1, total: AUTO_KEYWORDS.length } });
-          await new Promise((r) => setTimeout(r, 2000)); // 2s between keywords
-        } catch (e) {
-          console.error(`❌ Error "${kw}":`, e);
-        }
+    const items = (result.itemSummaries ?? []) as Record<string, unknown>[];
+    console.log(`   ${items.length} items`);
+
+    for (const item of items) {
+      const productId = await processItem(item, kw);
+      if (productId) {
+        totalAdded++;
+        const sp = (await import("@/lib/search-progress")).getSearchProgress();
+        updateProgress({ passed: sp.passed + 1 });
+        await autoPublish(productId);
       }
-
-      console.log(`\n✅ Auto-búsqueda completada. Guardados: ${totalAdded} | Publicados: ${totalPublished}`);
-
-    } else {
-      if (!keywords) return NextResponse.json({ error: "keywords required" }, { status: 400 });
-
-      console.log(`\n🔍 Búsqueda: "${keywords}"`);
-      console.log(`📋 $${CONFIG.MIN_PRICE}-$${CONFIG.MAX_PRICE} | China only | min ~${CONFIG.MIN_SOLD_30D} ventas/30d`);
-
-      const result = await searchProducts(keywords, limit);
-      const items  = (result.itemSummaries ?? []) as Record<string, unknown>[];
-      console.log(`📦 ${items.length} items\n`);
-
-      for (const item of items) {
-        const productId = await processItem(item, keywords);
-        if (productId) {
-          totalAdded++;
-          await autoPublish(productId);
-        }
-        await new Promise((r) => setTimeout(r, 3000)); // 3s between listings
-      }
-
-      console.log(`\n📊 "${keywords}": ${totalAdded} guardados, ${totalPublished} publicados`);
+      await new Promise((r) => setTimeout(r, 500));
     }
 
     endProgress();
