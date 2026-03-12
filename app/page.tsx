@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { db } from "@/lib/firebase-client";
 import { collection, query, where, onSnapshot, orderBy, limit } from "firebase/firestore";
 import { QueueProduct } from "@/types";
@@ -15,6 +15,8 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabType>("pending");
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const pauseRef = useRef(false);
   const [searchProgress, setSearchProgress] = useState<{reviewed:number;passed:number;published:number;failed:number;keyword:string;keywords:{done:number;total:number}} | null>(null);
   const [stats, setStats] = useState({ pending: 0, approved: 0, published: 0, rejected: 0, failed: 0 });
 
@@ -70,6 +72,10 @@ export default function Dashboard() {
         setSearchProgress({ reviewed: 0, passed: 0, published: 0, failed: 0, keyword: "", keywords: { done: 0, total: reversed.length } });
 
         for (let i = 0; i < reversed.length; i++) {
+          // Wait while paused
+          while (pauseRef.current) {
+            await new Promise(r => setTimeout(r, 500));
+          }
           const kw = reversed[i];
           setSearchProgress(p => p ? { ...p, keyword: kw, keywords: { done: i, total: reversed.length } } : p);
           try {
@@ -102,6 +108,8 @@ export default function Dashboard() {
       }
     } finally {
       setSearching(false);
+      setPaused(false);
+      pauseRef.current = false;
       setSearchProgress(null);
     }
   };;
@@ -223,7 +231,7 @@ export default function Dashboard() {
         />
 
         {searching && (
-          <div style={{ display:"flex", alignItems:"center", gap:"1rem", padding:"0.75rem 1rem", background:"#0d0d14", border:"1px solid #1e2235", borderRadius:"10px", marginBottom:"1rem", fontSize:"0.85rem", color:"#94a3b8" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:"1rem", justifyContent:"space-between", padding:"0.75rem 1rem", background:"#0d0d14", border:"1px solid #1e2235", borderRadius:"10px", marginBottom:"1rem", fontSize:"0.85rem", color:"#94a3b8" }}>
             <div style={{ width:16, height:16, border:"2px solid #3b82f6", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
             {searchProgress ? (
               <div style={{ display:"flex", gap:"1.5rem", flexWrap:"wrap" }}>
