@@ -87,7 +87,6 @@ export default function Dashboard() {
             if (sp.active) setSearchProgress(sp);
           } catch {}
           setSearchProgress(p => p ? { ...p, keywords: { done: i + 1, total: reversed.length } } : p);
-          await loadProducts();
         }
       } else {
         await fetch("/api/ebay/search", {
@@ -95,7 +94,6 @@ export default function Dashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ keywords, limit: 50 }),
         });
-        await loadProducts();
       }
     } finally {
       setSearching(false);
@@ -105,7 +103,6 @@ export default function Dashboard() {
 
   const handleAutoSearch = async () => {
     await handleSearch("", true);
-    await loadProducts();
   };;
 
   const handleImport = async (urls: string[]) => {
