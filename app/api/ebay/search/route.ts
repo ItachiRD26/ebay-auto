@@ -3,7 +3,6 @@ import { searchProducts, getUserToken } from "@/lib/ebay";
 import { db, COLLECTIONS } from "@/lib/firebase";
 import { QueueProduct } from "@/types";
 import { publishProductById, markPublishFailed } from "@/lib/publish";
-import { updateProgress, endProgress } from "@/lib/search-progress";
 
 // ─── Dropshipping config ──────────────────────────────────────────────────────
 const CONFIG = {
@@ -76,6 +75,17 @@ const EXCLUDED_KEYWORDS = [
   "subaru","mazda","mitsubishi","kia","acura","genesis","alfa romeo","bentley","rolls royce",
   // General brand protection
   "replica","counterfeit","fake","gun","firearm","ammo","ammunition","rifle","pistol",
+  // Electronics components & wiring
+  "wire","cable","awg","stranded","insulated","pvc wire","coaxial","ethernet cable",
+  "breadboard","arduino","raspberry pi","esp32","sensor","module","led strip driver",
+  "battery pack","lithium","18650","charger module","buck converter","voltage",
+  "oscilloscope","multimeter","soldering","flux","pcb board","prototype",
+  // Toys & toy parts
+  "toy","lego","action figure","doll","barbie","stuffed animal","toy car","toy gun",
+  "toy part","toy accessory","playset","building block",
+  // Adult / sexual
+  "dildo","vibrator","sex toy","anal","butt plug","penis","enlargement","erection",
+  "male enhancement","adult toy","lubricant","condom","lingerie",
   // Spare parts & electronics components
   "pump","diaphragm","impeller","valve","compressor","capacitor","resistor","transistor",
   "motherboard","circuit","pcb","ic chip","relay","solenoid","actuator","servo",
@@ -295,7 +305,6 @@ async function processItem(
   const catName    = ((item.categories as { categoryName: string }[])?.[0]?.categoryName) ?? "";
 
   // ── 1. Basic filters ────────────────────────────────────────────────────────
-  updateProgress({ reviewed: (await import("@/lib/search-progress")).getSearchProgress().reviewed + 1 });
   const pricing = calcPricing(item);
 
   if (pricing.ebayRefPrice < CONFIG.MIN_PRICE || pricing.ebayRefPrice > CONFIG.MAX_PRICE) {
@@ -411,15 +420,9 @@ export async function POST(req: NextRequest) {
       if (!userToken) return;
       try {
         await publishProductById(productId, userToken);
-        totalPublished++;
-        const sp = (await import("@/lib/search-progress")).getSearchProgress();
-        updateProgress({ published: sp.published + 1 });
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         console.error(`[search] ❌ Auto-publish failed for ${productId}: ${reason}`);
-        await markPublishFailed(productId, reason);
-        const sp = (await import("@/lib/search-progress")).getSearchProgress();
-        updateProgress({ failed: sp.failed + 1 });
       }
     };
 
@@ -428,34 +431,33 @@ export async function POST(req: NextRequest) {
     if (!kw) return NextResponse.json({ error: "keywords required" }, { status: 400 });
 
     console.log(`\n🔍 Búsqueda: "${kw}"`);
-    updateProgress({ keyword: kw });
-
     let result: { itemSummaries?: unknown[] };
     try {
       result = await searchProducts(kw, 20);
     } catch (searchErr) {
       const msg = searchErr instanceof Error ? searchErr.message : String(searchErr);
       console.warn(`[search] ⚠️ Failed "${kw}":`, msg);
-      endProgress();
       return NextResponse.json({ error: msg }, { status: 500 });
     }
 
     const items = (result.itemSummaries ?? []) as Record<string, unknown>[];
     console.log(`   ${items.length} items`);
+    let totalReviewed = 0;
+    let totalFailed = 0;
 
     for (const item of items) {
+      totalReviewed++;
       const productId = await processItem(item, kw);
       if (productId) {
         totalAdded++;
-        const sp = (await import("@/lib/search-progress")).getSearchProgress();
-        updateProgress({ passed: sp.passed + 1 });
         await autoPublish(productId);
+      } else {
+        totalFailed++;
       }
       await new Promise((r) => setTimeout(r, 500));
     }
 
-    endProgress();
-    return NextResponse.json({ success: true, added: totalAdded, published: totalPublished });
+    return NextResponse.json({ success: true, added: totalAdded, published: totalPublished, reviewed: totalReviewed, failed: totalFailed });
 
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);

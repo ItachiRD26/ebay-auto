@@ -73,20 +73,25 @@ export default function Dashboard() {
           const kw = reversed[i];
           setSearchProgress(p => p ? { ...p, keyword: kw, keywords: { done: i, total: reversed.length } } : p);
           try {
-            await fetch("/api/ebay/search", {
+            const res = await fetch("/api/ebay/search", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ keywords: kw, autoSearch: true }),
+              body: JSON.stringify({ keywords: kw }),
             });
+            const data = await res.json();
+            setSearchProgress(p => p ? {
+              ...p,
+              reviewed:  p.reviewed  + (data.reviewed  ?? 0),
+              passed:    p.passed    + (data.added      ?? 0),
+              published: p.published + (data.published  ?? 0),
+              failed:    p.failed    + (data.failed     ?? 0),
+              keyword: kw,
+              keywords: { done: i + 1, total: reversed.length },
+            } : p);
           } catch (e) {
             console.warn(`Keyword "${kw}" failed:`, e);
+            setSearchProgress(p => p ? { ...p, keywords: { done: i + 1, total: reversed.length } } : p);
           }
-          // Poll progress after each keyword
-          try {
-            const sp = await fetch("/api/ebay/search-status").then(r => r.json());
-            if (sp.active) setSearchProgress(sp);
-          } catch {}
-          setSearchProgress(p => p ? { ...p, keywords: { done: i + 1, total: reversed.length } } : p);
         }
       } else {
         await fetch("/api/ebay/search", {
