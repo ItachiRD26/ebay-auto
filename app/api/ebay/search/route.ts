@@ -18,42 +18,46 @@ const CONFIG = {
 
 // ─── Keyword list for auto-search ────────────────────────────────────────────
 const AUTO_KEYWORDS = [
-  // Storage & Organization
-  "organizer","holder","storage","container","basket","tray","shelf","rack",
-  "hook","hanger","divider","sorter","caddy","bin","drawer","compartment",
-  // Kitchen
-  "slicer","cutter","peeler","grater","press","strainer","opener","chopper",
-  "whisk","spatula","tongs","scraper","scoop","drainer","dispenser","colander",
-  "mandoline","zester","squeezer","ladle","skimmer","funnel","thermometer",
-  // Cleaning
-  "scrubber","sponge","duster","roller","squeegee","mop","wiper","cleaner",
-  "remover","brush","sweeper","sprayer","absorber","degreaser",
-  // Bathroom
-  "soap","toothbrush","shower","towel","mirror","dispenser","showerhead",
-  "loofa","pumice","exfoliator","diffuser","humidifier",
-  // Covers & Protection
-  "cover","mat","pad","case","protector","sleeve","shield","liner",
-  // Mounting & Support
-  "stand","mount","support","clip","frame","bracket","anchor","base",
-  // Bedroom & Decor
-  "lamp","candle","diffuser","clock","curtain","pillow","blanket","rug",
-  "artwork","figurine","vase","planter","lantern","string","wreath",
-  // Bags & Travel
-  "pouch","bag","backpack","luggage","wallet","purse","tote","packing",
-  // Pets
-  "pet","dog","cat","groomer","feeder","bowl","toy","collar","leash","bed",
-  "litter","aquarium","terrarium","crate","muzzle",
-  // Beauty & Personal Care
-  "makeup","cosmetic","comb","massager","applicator","roller","gua","trimmer",
-  "tweezers","eyelash","serum","mask","scrub","moisturizer","toner",
-  // Baby
-  "pacifier","teether","stroller","monitor","swaddle","bib","rattle",
-  // Office & Tech Accessories
-  "cable","mount","stand","webcam","mousepad","keyboard","monitor","headphone",
-  // Fitness
-  "resistance","yoga","foam","jump","roller","ab","ankle","stretcher","balance",
-  // Gadgets & Tools
-  "gadget","tool","box","kit","set","pump","sealer","thermometer","timer","scale",
+  // Organization & Storage
+  "caddy","canister","compartment","organizerbox","sorter","keeper","stash",
+  "slot","holderrack","tier","layer","locker","cabinet","organizertray",
+  "stacker","tote","cubby","pocket","carrier","wrapcase","keeperbox",
+
+  // Home & Living
+  "decor","ornament","accent","display","centerpiece","tabletop","backdrop",
+  "panel","board","plaque","tile","strip","plate","paneling","liner",
+  "overlay","insert","fixture","panelcover","trim","edging","border",
+
+  // Mounting / Hardware
+  "anchor","clamp","grip","latch","catch","pin","peg","loop","band",
+  "strap","ring","bolt","stud","bar","rail","pole","rod","arm",
+  "post","hinge","lock","cap","stopper","sealring","plug",
+
+  // Kitchen & Household Tools
+  "ladle","masher","crusher","skimmer","shaker","baster","dripper",
+  "infuser","sprayer","spreader","pincer","stirrer","twister","flipper",
+  "rollerpin","grinder","sifter","separator","breaker","twirl",
+
+  // Containers & Drinkware
+  "canteen","flask","pitcher","jug","decanter","thermos","kettle",
+  "carafe","dispenserjar","drinkholder","beaker","minijar","pourer",
+
+  // Cleaning & Maintenance
+  "polisher","sweeper","lintroller","dustpan","cloth","wipe","rag",
+  "absorber","refill","spraybottle","mistbottle","washer","rinser",
+
+  // Bathroom / Utility
+  "soapdish","soaptray","toothholder","cupholder","tissueholder",
+  "toothcup","rinsecup","brushholder","paperholder","washbin",
+
+  // Furniture / Home Accessories
+  "footrest","armrest","headrest","seatpad","benchpad","linerpad",
+  "chairpad","tablepad","protector","guard","edgeguard",
+
+  // Misc useful product nouns
+  "kit","set","bundle","pack","bundlepack","multi","combo",
+  "portable","foldable","extendable","adjuster","adapter",
+  "inserttray","dividertray","organizergrid","rackstand"
 ];
 
 const EXCLUDED_KEYWORDS = [
@@ -68,6 +72,10 @@ const EXCLUDED_KEYWORDS = [
   "owala","stanley cup","hydro flask","yeti","contigo","nalgene","camelbak",
   // Anime
   "anime","manga","naruto","dragon ball","one piece","demon slayer","attack on titan","pokemon","waifu",
+  "tony chopper","luffy","zoro","nami","sanji","nico robin","franky","brook","usopp",
+  "playmat","playing mat","trading card game mat","tcg mat","ccg mat","card game mat",
+  "opcg","tcg","ccg","yugioh","yu-gi-oh","magic the gathering","mtg","flesh and blood",
+  "dragon shield","ultra pro","card sleeve","card mat","card game","board game mat",
   // Auto brands
   "mercedes","mercedes-benz","bmw","audi","porsche","ferrari","lamborghini","maserati",
   "ford","chevrolet","chevy","dodge","jeep","tesla","honda","toyota","nissan","hyundai",
@@ -75,6 +83,9 @@ const EXCLUDED_KEYWORDS = [
   "subaru","mazda","mitsubishi","kia","acura","genesis","alfa romeo","bentley","rolls royce",
   // General brand protection
   "replica","counterfeit","fake","gun","firearm","ammo","ammunition","rifle","pistol",
+  // Food & beverage brands
+  "starbucks","nespresso","keurig","nescafe","lavazza","dunkin","red bull","monster energy",
+  "coca cola","pepsi","heineken","corona","budweiser","jack daniels","johnnie walker",
   // Beauty consumables (creams, perfumes, deodorants — usually branded)
   "face cream","moisturizer","serum","perfume","cologne","deodorant","antiperspirant",
   "body lotion","body cream","sunscreen","spf","retinol","vitamin c cream","eye cream",
@@ -104,6 +115,34 @@ const EXCLUDED_KEYWORDS = [
   // Medical / personal health devices
   "catheter","incontinence","colostomy","stoma","dialysis","surgical",
   "hearing aid","cpap","nebulizer","syringe","insulin",
+  "dental","dentist","orthodontic","tooth whitening","teeth whitening","mouthguard",
+  "retainer","braces","aligner","whitening strips","dental bib","tooth paste","toothpaste",
+  // Adult enhancement / sexual wellness devices
+  "extender","traction device","stretcher penis","male enlarger","penis pump",
+  "pro extender","apexdrive","apex drive","bigger growth","penile",
+  "erectile","male enhancement device","cock ring","chastity",
+  // Electronic massage devices & body stimulators
+  "electric massager","massage gun","percussion massager","vibrating massager",
+  "body massager","handheld massager","muscle massager","deep tissue massager",
+  "tens unit","ems machine","muscle stimulator","electro stimulator",
+  "infrared massager","heating massager","foot massager","neck massager",
+  "back massager","eye massager","scalp massager electric","massage wand",
+  // Medical & clinical
+  "compression sleeve","medical grade","orthopedic","therapeutic","clinical",
+  "blood pressure","pulse oximeter","glucose","ecg","ekg","stethoscope",
+  "thermometer medical","wound care","bandage","splint","brace medical",
+  // Skincare & cosmetic treatments (high return rate)
+  "retinol","vitamin c serum","hyaluronic","niacinamide","peptide cream",
+  "kojic acid","salicylic","glycolic","aha bha","chemical peel","microneedling",
+  "derma roller","led face mask","microcurrent","rf skin","ultrasonic skin",
+  "anti wrinkle device","skin tightening","photon therapy","collagen machine",
+  "ipl hair removal","laser hair","epilation device","hair removal device",
+  // Toy parts, upgrade kits, action figure accessories
+  "upgrade kit","3d printed","head upgrade","weapon kit","arm upgrade","wing kit",
+  "transformers","optimus prime","megatron","gundam","model kit","figure kit",
+  "resin kit","conversion kit","add-on kit","parts kit","custom part",
+  "injection molding","abs upgrade","pvc figure","diecast","figurine kit",
+  "killing arm","onyx prime","ss86","age of the primes",
   // Food & Plants (cannot dropship)
   "food","snack","candy","chocolate","coffee beans","tea leaves","protein powder",
   "supplement","vitamin","seeds","plant","succulent","cactus","flower bouquet",
@@ -360,7 +399,7 @@ async function processItem(
   }
 
   // ── 5. Duplicate check ──────────────────────────────────────────────────────
-  const dup = await db.collection(COLLECTIONS.QUEUE).where("ebayItemId", "==", itemId).limit(1).get();
+  const dup = await db.collection(COLLECTIONS.QUEUE).where("ebayItemId", "==", numericId).limit(1).get();
   if (!dup.empty) {
     console.log(`      ⚠️  DUPLICADO (itemId)`);
     return false;
@@ -385,7 +424,7 @@ async function processItem(
       : []);
 
   const queueProduct: Omit<QueueProduct, "id"> = {
-    ebayItemId:            itemId,
+    ebayItemId:            numericId,  // numeric only — needed for Trading API GetItem
     title,
     normalizedTitle:       title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim(),
     images,

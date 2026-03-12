@@ -413,13 +413,26 @@ export async function publishOffer(
 // Used by publish route to copy aspects from reference listing so our
 // listing passes eBay's category-specific item requirements automatically.
 
+export interface VariationSpec {
+  specifics: Record<string, string>;  // e.g. { Size: "S", Color: "Red" }
+  refPrice: number;                   // reference listing price for this variant
+}
+
+export interface VariationsData {
+  variations: VariationSpec[];
+  specificsSet: Record<string, string[]>;       // e.g. { Size: ["S","M","L"], Color: ["Red","Blue"] }
+  picturesByVariant: Record<string, string[]>;  // e.g. { "Red": ["url1","url2"], "Blue": ["url3"] }
+  pictureDimension: string;                     // which dimension has pictures, e.g. "Color"
+}
+
 export interface ReferenceItemData {
   title: string;
   description: string;
   categoryId: string;
-  aspects: Record<string, string[]>;   // ItemSpecifics as { Name: [Value] }
+  aspects: Record<string, string[]>;
   imageUrls: string[];
   condition: string;
+  variations: VariationsData | null;   // null if no variations
 }
 
 export async function getReferenceItemData(
@@ -447,9 +460,19 @@ export async function getReferenceItemData(
       signal: AbortSignal.timeout(12000),
     });
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const errText = await res.text();
+      console.log(`[getReferenceItemData] HTTP ${res.status}: ${errText.slice(0,200)}`);
+      return null;
+    }
     const text = await res.text();
-    if (text.includes("<Ack>Failure</Ack>")) return null;
+    if (text.includes("<Ack>Failure</Ack>")) {
+      const errMatch = text.match(/<LongMessage>(.*?)<\/LongMessage>/);
+      console.log(`[getReferenceItemData] eBay Failure: ${errMatch?.[1] ?? text.slice(0,200)}`);
+      return null;
+    }
+    const hasVariations = text.includes("<Variations>");
+    console.log(`[getReferenceItemData] OK — hasVariations=${hasVariations} textLen=${text.length}`);
 
     // Title
     const titleMatch = text.match(/<Title>([\s\S]*?)<\/Title>/);
@@ -493,7 +516,76 @@ export async function getReferenceItemData(
       }
     }
 
-    return { title, description, categoryId, aspects, imageUrls, condition };
+    // ── Variations ───────────────────────────────────────────────────────────
+    let variations: VariationsData | null = null;
+    if (text.includes("<Variations>")) {
+      // Parse each <Variation> block
+      const varSpecs: VariationSpec[] = [];
+      const varRegex = /<Variation>([\s\S]*?)<\/Variation>/g;
+      let varMatch;
+      while ((varMatch = varRegex.exec(text)) !== null) {
+        const block = varMatch[1];
+        const priceMatch = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+        const refPrice = priceMatch ? parseFloat(priceMatch[1]) : 0;
+        const specifics: Record<string, string> = {};
+        const specRegex = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+        let specMatch;
+        while ((specMatch = specRegex.exec(block)) !== null) {
+          const nameM = specMatch[1].match(/<Name>(.*?)<\/Name>/);
+          const valM  = specMatch[1].match(/<Value>(.*?)<\/Value>/);
+          if (nameM && valM) specifics[nameM[1].trim()] = valM[1].trim();
+        }
+        if (Object.keys(specifics).length > 0) varSpecs.push({ specifics, refPrice });
+      }
+
+      // Parse <VariationSpecificsSet> for the full list of options
+      const specificsSet: Record<string, string[]> = {};
+      const setMatch = text.match(/<VariationSpecificsSet>([\s\S]*?)<\/VariationSpecificsSet>/);
+      if (setMatch) {
+        const setRegex = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+        let setNvl;
+        while ((setNvl = setRegex.exec(setMatch[1])) !== null) {
+          const nameM = setNvl[1].match(/<Name>(.*?)<\/Name>/);
+          if (!nameM) continue;
+          const name = nameM[1].trim();
+          const vals: string[] = [];
+          const valRegex = /<Value>(.*?)<\/Value>/g;
+          let valM;
+          while ((valM = valRegex.exec(setNvl[1])) !== null) vals.push(valM[1].trim());
+          if (vals.length > 0) specificsSet[name] = vals;
+        }
+      }
+
+      // Parse <Pictures> block — maps a variation dimension to image URLs per value
+      // eBay XML: <Pictures><VariationSpecificName>Color</VariationSpecificName>
+      //           <VariationSpecificPictureSet><VariationSpecificValue>Red</VariationSpecificValue>
+      //           <PictureURL>...</PictureURL></VariationSpecificPictureSet></Pictures>
+      const picturesByVariant: Record<string, string[]> = {};
+      let pictureDimension = "";
+      const picsMatch = text.match(/<Pictures>([\s\S]*?)<\/Pictures>/);
+      if (picsMatch) {
+        const dimMatch = picsMatch[1].match(/<VariationSpecificName>(.*?)<\/VariationSpecificName>/);
+        if (dimMatch) pictureDimension = dimMatch[1].trim();
+        const setPicRegex = /<VariationSpecificPictureSet>([\s\S]*?)<\/VariationSpecificPictureSet>/g;
+        let setPicMatch;
+        while ((setPicMatch = setPicRegex.exec(picsMatch[1])) !== null) {
+          const valMatch = setPicMatch[1].match(/<VariationSpecificValue>(.*?)<\/VariationSpecificValue>/);
+          if (!valMatch) continue;
+          const varValue = valMatch[1].trim();
+          const picUrls: string[] = [];
+          const picUrlRegex = /<PictureURL>(https?:\/\/[^<]+)<\/PictureURL>/g;
+          let picUrlMatch;
+          while ((picUrlMatch = picUrlRegex.exec(setPicMatch[1])) !== null) {
+            picUrls.push(picUrlMatch[1]);
+          }
+          if (picUrls.length > 0) picturesByVariant[varValue] = picUrls;
+        }
+      }
+
+      if (varSpecs.length > 0) variations = { variations: varSpecs, specificsSet, picturesByVariant, pictureDimension };
+    }
+
+    return { title, description, categoryId, aspects, imageUrls, condition, variations };
   } catch {
     return null;
   }

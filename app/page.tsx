@@ -16,6 +16,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [promoting, setPromoting] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanResult, setCleanResult] = useState<{delisted:number,checked:number} | null>(null);
   const pauseRef = useRef(false);
   const [searchProgress, setSearchProgress] = useState<{reviewed:number;passed:number;published:number;failed:number;keyword:string;keywords:{done:number;total:number}} | null>(null);
   const [stats, setStats] = useState({ pending: 0, approved: 0, published: 0, rejected: 0, failed: 0 });
@@ -200,6 +203,35 @@ export default function Dashboard() {
   };
 
 
+  const handleCleanPublished = async () => {
+    if (!confirm("¿Revisar todos los listings publicados y deslistar los que tengan keywords baneadas?")) return;
+    setCleaning(true);
+    setCleanResult(null);
+    try {
+      const res = await fetch("/api/ebay/clean-published", { method: "POST" });
+      const data = await res.json();
+      if (data.error) alert("Error: " + data.error);
+      else {
+        setCleanResult({ delisted: data.delisted, checked: data.checked }); // onSnapshot updates automatically
+      }
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  const handlePromoteAll = async () => {
+    if (!confirm(`¿Agregar 2% Promoted Listings a todos los productos publicados? (los que ya lo tengan serán ignorados por eBay)`)) return;
+    setPromoting(true);
+    try {
+      const res = await fetch("/api/ebay/promote", { method: "POST" });
+      const data = await res.json();
+      if (data.error) alert("Error: " + data.error);
+      else alert(`✅ Actualizados: ${data.updated} | ❌ Fallidos: ${data.failed}`);
+    } finally {
+      setPromoting(false);
+    }
+  };
+
   const tabs = [
     { key: "pending" as TabType, label: "Pendientes", color: "#f59e0b" },
     { key: "approved" as TabType, label: "Aprobados", color: "#10b981" },
@@ -232,23 +264,32 @@ export default function Dashboard() {
 
         {searching && (
           <div style={{ display:"flex", alignItems:"center", gap:"1rem", justifyContent:"space-between", padding:"0.75rem 1rem", background:"#0d0d14", border:"1px solid #1e2235", borderRadius:"10px", marginBottom:"1rem", fontSize:"0.85rem", color:"#94a3b8" }}>
-            <div style={{ width:16, height:16, border:"2px solid #3b82f6", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
-            {searchProgress ? (
-              <div style={{ display:"flex", gap:"1.5rem", flexWrap:"wrap" }}>
-                {searchProgress.keywords.total > 1 && (
-                  <span>📋 Keywords: <strong style={{color:"#e2e8f0"}}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>
-                )}
-                {searchProgress.keyword && (
-                  <span>🔍 <strong style={{color:"#e2e8f0"}}>"{searchProgress.keyword}"</strong></span>
-                )}
-                <span>👁 Revisados: <strong style={{color:"#e2e8f0"}}>{searchProgress.reviewed}</strong></span>
-                <span>✅ Pasaron: <strong style={{color:"#10b981"}}>{searchProgress.passed}</strong></span>
-                <span>🚀 Publicados: <strong style={{color:"#3b82f6"}}>{searchProgress.published}</strong></span>
-                {searchProgress.failed > 0 && <span>🚫 Filtrados: <strong style={{color:"#64748b"}}>{searchProgress.failed}</strong></span>}
-              </div>
-            ) : (
-              <span>Iniciando búsqueda...</span>
-            )}
+            <div style={{ display:"flex", alignItems:"center", gap:"0.75rem", flex:1 }}>
+              {!paused && <div style={{ width:16, height:16, border:"2px solid #3b82f6", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />}
+              {paused && <div style={{ width:16, height:16, background:"#f59e0b", borderRadius:"50%", flexShrink:0 }} />}
+              {searchProgress ? (
+                <div style={{ display:"flex", gap:"1.5rem", flexWrap:"wrap" }}>
+                  {searchProgress.keywords.total > 1 && (
+                    <span>📋 Keywords: <strong style={{color:"#e2e8f0"}}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>
+                  )}
+                  {searchProgress.keyword && (
+                    <span>🔍 <strong style={{color:"#e2e8f0"}}>"{searchProgress.keyword}"</strong></span>
+                  )}
+                  <span>👁 Revisados: <strong style={{color:"#e2e8f0"}}>{searchProgress.reviewed}</strong></span>
+                  <span>✅ Pasaron: <strong style={{color:"#10b981"}}>{searchProgress.passed}</strong></span>
+                  <span>🚀 Publicados: <strong style={{color:"#3b82f6"}}>{searchProgress.published}</strong></span>
+                  {searchProgress.failed > 0 && <span>🚫 Filtrados: <strong style={{color:"#64748b"}}>{searchProgress.failed}</strong></span>}
+                </div>
+              ) : (
+                <span>Iniciando búsqueda...</span>
+              )}
+            </div>
+            <button
+              onClick={() => { paused ? (setPaused(false), pauseRef.current = false) : (setPaused(true), pauseRef.current = true); }}
+              style={{ flexShrink:0, padding:"0.35rem 0.9rem", borderRadius:"6px", border:"none", fontWeight:600, cursor:"pointer", fontSize:"0.8rem",
+                background: paused ? "#10b981" : "#f59e0b", color:"#000" }}>
+              {paused ? "▶ Reanudar" : "⏸ Pausar"}
+            </button>
           </div>
         )}
 
@@ -269,6 +310,25 @@ export default function Dashboard() {
         </div>
 
 
+        {activeTab === "published" && stats.published > 0 && (
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:"0.75rem", marginBottom:"1rem", alignItems:"center" }}>
+            {cleanResult && (
+              <span style={{ fontSize:"0.82rem", color: cleanResult.delisted > 0 ? "#f87171" : "#10b981" }}>
+                {cleanResult.delisted > 0
+                  ? `🗑 ${cleanResult.delisted} deslisting de ${cleanResult.checked} revisados`
+                  : `✅ ${cleanResult.checked} revisados — todo limpio`}
+              </span>
+            )}
+            <button onClick={handleCleanPublished} disabled={cleaning}
+              style={{ background:"#dc2626", color:"#fff", border:"none", borderRadius:"8px", padding:"0.5rem 1.2rem", fontWeight:600, cursor:cleaning?"not-allowed":"pointer", opacity:cleaning?0.6:1 }}>
+              {cleaning ? "Revisando..." : `🧹 Limpiar baneados`}
+            </button>
+            <button onClick={handlePromoteAll} disabled={promoting}
+              style={{ background:"#7c3aed", color:"#fff", border:"none", borderRadius:"8px", padding:"0.5rem 1.2rem", fontWeight:600, cursor:promoting?"not-allowed":"pointer", opacity:promoting?0.6:1 }}>
+              {promoting ? "Aplicando ads..." : `📢 Agregar 2% Ads a todos (${stats.published})`}
+            </button>
+          </div>
+        )}
         {activeTab === "approved" && stats.approved > 0 && (
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
             {publishingAll && (
