@@ -96,9 +96,15 @@ async function addFixedPriceItem(
   });
 
   if (statusCode !== 200) throw new Error(`AddFixedPriceItem HTTP ${statusCode}`);
+  // Only fail on Failure — Warning means it worked but eBay renamed some specifics
   if (body.includes("<Ack>Failure</Ack>")) {
     const errMatch = body.match(/<LongMessage>(.*?)<\/LongMessage>/);
     throw new Error(`AddFixedPriceItem failed: ${errMatch?.[1] ?? body.slice(0, 300)}`);
+  }
+  // Log warnings but don't throw
+  if (body.includes("<Ack>Warning</Ack>")) {
+    const warnMatch = body.match(/<ShortMessage>(.*?)<\/ShortMessage>/);
+    console.warn(`[publish] eBay warning: ${warnMatch?.[1] ?? "unknown warning"}`);
   }
 
   const itemMatch = body.match(/<ItemID>(\d+)<\/ItemID>/);
