@@ -354,25 +354,23 @@ export async function createOffer(
     merchantLocationKey: process.env.EBAY_MERCHANT_LOCATION_KEY ?? "default",
   };
 
-  const res = await fetch(
-    "https://api.ebay.com/sell/inventory/v1/offer",
+  const { statusCode, body: resBody } = await nodeHttpsRequest(
+    "api.ebay.com",
+    "/sell/inventory/v1/offer",
+    "POST",
     {
-      method: "POST",
-      headers: {
-        Authorization:              `Bearer ${userToken}`,
-        "Content-Type":             "application/json",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-      },
-      body: JSON.stringify(body),
-    }
+      Authorization:              `Bearer ${userToken}`,
+      "Content-Type":             "application/json",
+      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+    },
+    JSON.stringify(body)
   );
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`createOffer failed (${res.status}): ${err.slice(0, 300)}`);
+  if (statusCode !== 200 && statusCode !== 201) {
+    throw new Error(`createOffer failed (${statusCode}): ${resBody.slice(0, 300)}`);
   }
 
-  const data = await res.json();
+  const data = JSON.parse(resBody);
   return { offerId: data.offerId };
 }
 
@@ -383,24 +381,22 @@ export async function publishOffer(
   offerId: string,
   userToken: string
 ): Promise<{ listingId: string }> {
-  const res = await fetch(
-    `https://api.ebay.com/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish`,
+  const { statusCode, body: resBody } = await nodeHttpsRequest(
+    "api.ebay.com",
+    `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish`,
+    "POST",
     {
-      method: "POST",
-      headers: {
-        Authorization:              `Bearer ${userToken}`,
-        "Content-Type":             "application/json",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-      },
+      Authorization:              `Bearer ${userToken}`,
+      "Content-Type":             "application/json",
+      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
     }
   );
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`publishOffer failed (${res.status}): ${err.slice(0, 300)}`);
+  if (statusCode !== 200 && statusCode !== 204) {
+    throw new Error(`publishOffer failed (${statusCode}): ${resBody.slice(0, 300)}`);
   }
 
-  const data = await res.json();
+  const data = JSON.parse(resBody || "{}");
   return { listingId: data.listingId };
 }
 // ─── Trading API: Get full item details including ItemSpecifics ───────────────
