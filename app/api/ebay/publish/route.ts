@@ -55,23 +55,17 @@ async function addFixedPriceItem(
     <Quantity>${product.stock}</Quantity>
     <PictureDetails>${picturesXml}</PictureDetails>
     <ItemSpecifics>${specificsXml}</ItemSpecifics>
-    <ShippingDetails>
-      <ShippingType>Flat</ShippingType>
-      <ShippingServiceOptions>
-        <ShippingServicePriority>1</ShippingServicePriority>
-        <ShippingService>USPSFirstClass</ShippingService>
-        <ShippingServiceCost>0.00</ShippingServiceCost>
-        <FreeShipping>true</FreeShipping>
-      </ShippingServiceOptions>
-      <ExcludeShipToLocation>PR</ExcludeShipToLocation>
-      <ExcludeShipToLocation>GU</ExcludeShipToLocation>
-      <ExcludeShipToLocation>VI</ExcludeShipToLocation>
-      <ExcludeShipToLocation>AK</ExcludeShipToLocation>
-      <ExcludeShipToLocation>HI</ExcludeShipToLocation>
-    </ShippingDetails>
-    <ReturnPolicy>
-      <ReturnsAcceptedOption>ReturnsNotAccepted</ReturnsAcceptedOption>
-    </ReturnPolicy>
+    <SellerProfiles>
+      <SellerShippingProfile>
+        <ShippingProfileID>${process.env.EBAY_FULFILLMENT_POLICY_ID}</ShippingProfileID>
+      </SellerShippingProfile>
+      <SellerReturnProfile>
+        <ReturnProfileID>${process.env.EBAY_RETURN_POLICY_ID}</ReturnProfileID>
+      </SellerReturnProfile>
+      <SellerPaymentProfile>
+        <PaymentProfileID>${process.env.EBAY_PAYMENT_POLICY_ID}</PaymentProfileID>
+      </SellerPaymentProfile>
+    </SellerProfiles>
     <Site>US</Site>
   </Item>
 </AddFixedPriceItemRequest>`;
