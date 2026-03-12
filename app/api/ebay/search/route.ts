@@ -429,18 +429,23 @@ export async function POST(req: NextRequest) {
     let totalAdded = 0;
     let totalPublished = 0;
 
-    // Get user token for auto-publishing
-    const tokenDoc = await db.collection("tokens").doc("ebay_user").get();
-    const userToken = tokenDoc.exists ? tokenDoc.data()!.access_token : null;
-    if (!userToken) console.warn("[search] No user token — products will be saved but NOT published");
+    // Get user token for auto-publishing (getUserToken auto-refreshes if expired)
+    let userToken: string | null = null;
+    try {
+      userToken = await getUserToken();
+    } catch {
+      console.warn("[search] No user token — products will be saved but NOT published");
+    }
 
     const autoPublish = async (productId: string) => {
       if (!userToken) return;
       try {
         await publishProductById(productId, userToken);
+        totalPublished++;
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         console.error(`[search] ❌ Auto-publish failed for ${productId}: ${reason}`);
+        await markPublishFailed(productId, reason);
       }
     };
 
@@ -461,7 +466,7 @@ export async function POST(req: NextRequest) {
     const items = (result.itemSummaries ?? []) as Record<string, unknown>[];
     console.log(`   ${items.length} items`);
     let totalReviewed = 0;
-    let totalFailed = 0;
+    let totalSkipped = 0;
 
     for (const item of items) {
       totalReviewed++;
@@ -470,12 +475,12 @@ export async function POST(req: NextRequest) {
         totalAdded++;
         await autoPublish(productId);
       } else {
-        totalFailed++;
+        totalSkipped++;
       }
       await new Promise((r) => setTimeout(r, 500));
     }
 
-    return NextResponse.json({ success: true, added: totalAdded, published: totalPublished, reviewed: totalReviewed, failed: totalFailed });
+    return NextResponse.json({ success: true, added: totalAdded, published: totalPublished, reviewed: totalReviewed, skipped: totalSkipped });
 
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);

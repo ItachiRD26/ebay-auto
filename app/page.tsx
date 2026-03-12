@@ -90,7 +90,7 @@ export default function Dashboard() {
               reviewed:  p.reviewed  + (data.reviewed  ?? 0),
               passed:    p.passed    + (data.added      ?? 0),
               published: p.published + (data.published  ?? 0),
-              failed:    p.failed    + (data.failed     ?? 0),
+              failed:    p.failed    + (data.skipped    ?? 0),
               keyword: kw,
               keywords: { done: i + 1, total: reversed.length },
             } : p);
@@ -244,7 +244,7 @@ export default function Dashboard() {
                 <span>👁 Revisados: <strong style={{color:"#e2e8f0"}}>{searchProgress.reviewed}</strong></span>
                 <span>✅ Pasaron: <strong style={{color:"#10b981"}}>{searchProgress.passed}</strong></span>
                 <span>🚀 Publicados: <strong style={{color:"#3b82f6"}}>{searchProgress.published}</strong></span>
-                {searchProgress.failed > 0 && <span>❌ Fallidos: <strong style={{color:"#f97316"}}>{searchProgress.failed}</strong></span>}
+                {searchProgress.failed > 0 && <span>🚫 Filtrados: <strong style={{color:"#64748b"}}>{searchProgress.failed}</strong></span>}
               </div>
             ) : (
               <span>Iniciando búsqueda...</span>
