@@ -34,6 +34,7 @@ export interface QueueProduct {
   sourceUrl:   string;
   status:      "pending" | "approved" | "rejected" | "published" | "failed";
   failReason?:    string;
+  normalizedTitle?: string;
   bidPercentage?: number;
   description: string;
   stock:       number;

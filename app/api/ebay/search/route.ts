@@ -75,6 +75,14 @@ const EXCLUDED_KEYWORDS = [
   "subaru","mazda","mitsubishi","kia","acura","genesis","alfa romeo","bentley","rolls royce",
   // General brand protection
   "replica","counterfeit","fake","gun","firearm","ammo","ammunition","rifle","pistol",
+  // Beauty consumables (creams, perfumes, deodorants — usually branded)
+  "face cream","moisturizer","serum","perfume","cologne","deodorant","antiperspirant",
+  "body lotion","body cream","sunscreen","spf","retinol","vitamin c cream","eye cream",
+  "anti-aging","anti aging","wrinkle","dark spot","whitening cream","bleaching",
+  "toner","essence","ampoule","bb cream","cc cream","foundation","concealer",
+  "lipstick","lip gloss","eyeshadow","mascara","blush","highlighter","powder makeup",
+  "hair dye","hair color","keratin","shampoo","conditioner","hair mask","hair oil",
+  "body wash","shower gel","bath bomb","soap bar","hand cream","foot cream",
   // Electronics components & wiring
   "wire","cable","awg","stranded","insulated","pvc wire","coaxial","ethernet cable",
   "breadboard","arduino","raspberry pi","esp32","sensor","module","led strip driver",
@@ -354,7 +362,16 @@ async function processItem(
   // ── 5. Duplicate check ──────────────────────────────────────────────────────
   const dup = await db.collection(COLLECTIONS.QUEUE).where("ebayItemId", "==", itemId).limit(1).get();
   if (!dup.empty) {
-    console.log(`      ⚠️  DUPLICADO`);
+    console.log(`      ⚠️  DUPLICADO (itemId)`);
+    return false;
+  }
+
+  // Also check by normalized title (first 60 chars) to catch same product with diff ID
+  const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
+  const titleDup = await db.collection(COLLECTIONS.QUEUE)
+    .where("normalizedTitle", "==", normalizedTitle).limit(1).get();
+  if (!titleDup.empty) {
+    console.log(`      ⚠️  DUPLICADO (título: "${normalizedTitle.slice(0, 40)}")`);
     return false;
   }
 
@@ -370,6 +387,7 @@ async function processItem(
   const queueProduct: Omit<QueueProduct, "id"> = {
     ebayItemId:            itemId,
     title,
+    normalizedTitle:       title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim(),
     images,
     ebayReferencePrice:    pricing.ebayRefPrice,
     ebayShippingCost:      pricing.ebayShippingCost,
