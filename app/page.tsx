@@ -15,6 +15,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabType>("pending");
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
+  const [searchProgress, setSearchProgress] = useState<{reviewed:number;passed:number;published:number;failed:number;keyword:string;keywords:{done:number;total:number}} | null>(null);
   const [stats, setStats] = useState({ pending: 0, approved: 0, published: 0, rejected: 0, failed: 0 });
 
   useEffect(() => {
@@ -41,6 +42,20 @@ export default function Dashboard() {
     );
     return () => unsubs.forEach((u) => u());
   }, []);
+
+  // Poll search progress while searching
+  useEffect(() => {
+    if (!searching) { setSearchProgress(null); return; }
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/ebay/search-status");
+        const data = await res.json();
+        if (data.active) setSearchProgress(data);
+        else if (searchProgress) setSearchProgress(null);
+      } catch {}
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [searching]);
 
   const handleSearch = async (keywords: string) => {
     setSearching(true);
@@ -189,6 +204,28 @@ export default function Dashboard() {
           onImport={handleImport}
           loading={searching}
         />
+
+        {searching && (
+          <div style={{ display:"flex", alignItems:"center", gap:"1rem", padding:"0.75rem 1rem", background:"#0d0d14", border:"1px solid #1e2235", borderRadius:"10px", marginBottom:"1rem", fontSize:"0.85rem", color:"#94a3b8" }}>
+            <div style={{ width:16, height:16, border:"2px solid #3b82f6", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
+            {searchProgress ? (
+              <div style={{ display:"flex", gap:"1.5rem", flexWrap:"wrap" }}>
+                {searchProgress.keywords.total > 1 && (
+                  <span>📋 Keywords: <strong style={{color:"#e2e8f0"}}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>
+                )}
+                {searchProgress.keyword && (
+                  <span>🔍 <strong style={{color:"#e2e8f0"}}>"{searchProgress.keyword}"</strong></span>
+                )}
+                <span>👁 Revisados: <strong style={{color:"#e2e8f0"}}>{searchProgress.reviewed}</strong></span>
+                <span>✅ Pasaron: <strong style={{color:"#10b981"}}>{searchProgress.passed}</strong></span>
+                <span>🚀 Publicados: <strong style={{color:"#3b82f6"}}>{searchProgress.published}</strong></span>
+                {searchProgress.failed > 0 && <span>❌ Fallidos: <strong style={{color:"#f97316"}}>{searchProgress.failed}</strong></span>}
+              </div>
+            ) : (
+              <span>Iniciando búsqueda...</span>
+            )}
+          </div>
+        )}
 
         <div className="tabs">
           {tabs.map((tab) => (

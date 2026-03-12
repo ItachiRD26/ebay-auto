@@ -3,6 +3,7 @@ import { searchProducts, getUserToken } from "@/lib/ebay";
 import { db, COLLECTIONS } from "@/lib/firebase";
 import { QueueProduct } from "@/types";
 import { publishProductById, markPublishFailed } from "@/lib/publish";
+import { resetProgress, updateProgress, endProgress } from "@/lib/search-progress";
 
 // ─── Dropshipping config ──────────────────────────────────────────────────────
 const CONFIG = {
@@ -18,51 +19,42 @@ const CONFIG = {
 
 // ─── Keyword list for auto-search ────────────────────────────────────────────
 const AUTO_KEYWORDS = [
-  // Home & Storage
-  "storage organizer","closet organizer","shoe rack","drawer organizer",
-  "storage bins","storage baskets","wall shelf","floating shelf",
-  "laundry hamper","vacuum storage bags","over door organizer",
+  // Storage & Organization
+  "organizer","holder","storage","container","basket","tray","shelf","rack",
+  "hook","hanger","divider","sorter","caddy","bin","drawer","compartment",
   // Kitchen
-  "kitchen organizer","spice rack","cutting board","kitchen gadgets",
-  "coffee mug","water bottle","lunch box","meal prep containers",
-  "pot rack","dish drying rack","kitchen mat","silicone cooking utensils",
-  // Bathroom
-  "bathroom organizer","shower caddy","bath mat","towel rack",
-  "toilet paper holder","soap dispenser","toothbrush holder",
-  // Bedroom & Decor
-  "throw blanket","throw pillow","blackout curtains","wall art",
-  "picture frame","led strip lights","night light","alarm clock",
-  "candle holder","desk lamp","floor lamp",
+  "slicer","cutter","peeler","grater","press","strainer","opener","chopper",
+  "whisk","spatula","tongs","scraper","scoop","drainer","dispenser","colander",
+  "mandoline","zester","squeezer","ladle","skimmer","funnel","thermometer",
   // Cleaning
-  "mop bucket set","microfiber mop","cleaning brush set",
-  "squeegee","lint roller","robot mop pads",
-  // Office & Desk
-  "desk organizer","cable organizer","monitor stand","mouse pad",
-  "laptop stand","desk mat","sticky notes holder","pen holder",
-  // Fitness
-  "resistance bands set","yoga mat","foam roller","jump rope",
-  "ab roller","pull up bar","exercise ball","ankle weights",
-  "massage gun","gym bag",
-  // Beauty
-  "makeup organizer","makeup brush set","nail art kit",
-  "hair clips set","hair ties","jade roller","face mask",
-  "bath bomb set","loofah","nail file set",
+  "scrubber","sponge","duster","roller","squeegee","mop","wiper","cleaner",
+  "remover","brush","sweeper","sprayer","absorber","degreaser",
+  // Bathroom
+  "soap","toothbrush","shower","towel","mirror","dispenser","showerhead",
+  "loofa","pumice","exfoliator","diffuser","humidifier",
+  // Covers & Protection
+  "cover","mat","pad","case","protector","sleeve","shield","liner",
+  // Mounting & Support
+  "stand","mount","support","clip","frame","bracket","anchor","base",
+  // Bedroom & Decor
+  "lamp","candle","diffuser","clock","curtain","pillow","blanket","rug",
+  "artwork","figurine","vase","planter","lantern","string","wreath",
+  // Bags & Travel
+  "pouch","bag","backpack","luggage","wallet","purse","tote","packing",
   // Pets
-  "dog leash","dog collar","cat toy set","pet food bowl",
-  "dog grooming brush","cat litter mat","pet nail clippers",
-  "dog bandana","pet carrier bag","dog harness",
-  // Baby & Kids
-  "baby bottle set","diaper bag","baby gate",
-  "baby bath seat","stroller organizer","kids puzzle",
-  "fidget toys","sensory toys","baby nasal aspirator",
-  // Garden & Outdoor
-  "garden tools set","plant pots set","garden gloves",
-  "solar lights outdoor","hose nozzle","succulent pots",
-  "bird feeder","watering can","garden kneeler",
-  // Travel
-  "packing cubes","luggage tag","travel pillow",
-  "travel bottles set","passport holder","travel toiletry bag",
-  "neck pillow","luggage scale","travel adapter",
+  "pet","dog","cat","groomer","feeder","bowl","toy","collar","leash","bed",
+  "litter","aquarium","terrarium","crate","muzzle",
+  // Beauty & Personal Care
+  "makeup","cosmetic","comb","massager","applicator","roller","gua","trimmer",
+  "tweezers","eyelash","serum","mask","scrub","moisturizer","toner",
+  // Baby
+  "pacifier","teether","stroller","monitor","swaddle","bib","rattle",
+  // Office & Tech Accessories
+  "cable","mount","stand","webcam","mousepad","keyboard","monitor","headphone",
+  // Fitness
+  "resistance","yoga","foam","jump","roller","ab","ankle","stretcher","balance",
+  // Gadgets & Tools
+  "gadget","tool","box","kit","set","pump","sealer","thermometer","timer","scale",
 ];
 
 const EXCLUDED_KEYWORDS = [
@@ -293,6 +285,7 @@ async function processItem(
   const catName    = ((item.categories as { categoryName: string }[])?.[0]?.categoryName) ?? "";
 
   // ── 1. Basic filters ────────────────────────────────────────────────────────
+  updateProgress({ reviewed: (await import("@/lib/search-progress")).getSearchProgress().reviewed + 1 });
   const pricing = calcPricing(item);
 
   if (pricing.ebayRefPrice < CONFIG.MIN_PRICE || pricing.ebayRefPrice > CONFIG.MAX_PRICE) {
@@ -395,6 +388,10 @@ export async function POST(req: NextRequest) {
     let totalAdded = 0;
     let totalPublished = 0;
 
+    // Init progress tracking
+    const isAuto = !!body.autoSearch;
+    resetProgress(isAuto ? AUTO_KEYWORDS.length : 1);
+
     // Get user token for auto-publishing
     const tokenDoc = await db.collection("tokens").doc("ebay_user").get();
     const userToken = tokenDoc.exists ? tokenDoc.data()!.access_token : null;
@@ -405,10 +402,14 @@ export async function POST(req: NextRequest) {
       try {
         await publishProductById(productId, userToken);
         totalPublished++;
+        const sp = (await import("@/lib/search-progress")).getSearchProgress();
+        updateProgress({ published: sp.published + 1 });
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         console.error(`[search] ❌ Auto-publish failed for ${productId}: ${reason}`);
         await markPublishFailed(productId, reason);
+        const sp = (await import("@/lib/search-progress")).getSearchProgress();
+        updateProgress({ failed: sp.failed + 1 });
       }
     };
 
@@ -418,6 +419,7 @@ export async function POST(req: NextRequest) {
 
       for (const kw of [...AUTO_KEYWORDS].reverse()) {
         try {
+          updateProgress({ keyword: kw });
           console.log(`\n🔑 "${kw}"`);
           const result = await searchProducts(kw, 20);
           const items  = (result.itemSummaries ?? []) as Record<string, unknown>[];
@@ -427,11 +429,14 @@ export async function POST(req: NextRequest) {
             const productId = await processItem(item, kw);
             if (productId) {
               totalAdded++;
+              const sp = (await import("@/lib/search-progress")).getSearchProgress();
+              updateProgress({ passed: sp.passed + 1 });
               await autoPublish(productId);
             }
             await new Promise((r) => setTimeout(r, 3000)); // 3s between listings
           }
 
+          updateProgress({ keywords: { done: (await import("@/lib/search-progress")).getSearchProgress().keywords.done + 1, total: AUTO_KEYWORDS.length } });
           await new Promise((r) => setTimeout(r, 2000)); // 2s between keywords
         } catch (e) {
           console.error(`❌ Error "${kw}":`, e);
@@ -462,6 +467,7 @@ export async function POST(req: NextRequest) {
       console.log(`\n📊 "${keywords}": ${totalAdded} guardados, ${totalPublished} publicados`);
     }
 
+    endProgress();
     return NextResponse.json({ success: true, added: totalAdded, published: totalPublished });
 
   } catch (error: unknown) {
