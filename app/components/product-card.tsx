@@ -13,12 +13,13 @@ interface Props {
 
 export default function ProductCard({ product, onApprove, onReject, onPublish, onUpdate }: Props) {
   const [editing, setEditing] = useState(false);
-  const [price, setPrice] = useState(product.suggestedSellingPrice.toString());
+  const [price, setPrice] = useState((product.suggestedSellingPrice ?? 0).toString());
   const [eproloPrice, setEproloPrice] = useState(product.eproloPrice?.toString() ?? "");
   const [description, setDescription] = useState(product.description ?? "");
   const [stock, setStock] = useState(product.stock?.toString() ?? "10");
   const [currentImg, setCurrentImg] = useState(0);
   const [publishing, setPublishing] = useState(false);
+  const [delisting, setDelisting] = useState(false);
 
   const sellingPrice = parseFloat(price) || 0;
   const costPrice = parseFloat(eproloPrice) || 0;
@@ -31,8 +32,28 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
     setEditing(false);
   };
 
+  const handleDelist = async () => {
+    if (!confirm("¿Deslistar este producto de eBay?")) return;
+    setDelisting(true);
+    try {
+      const res = await fetch("/api/ebay/delist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: product.id, listingId: product.listingId }),
+      });
+      const data = await res.json();
+      if (data.error) alert("Error: " + data.error);
+    } finally {
+      setDelisting(false);
+    }
+  };
+
   const handlePublish = async () => {
     setPublishing(true);
+    // If retrying a failed product, reset to approved first
+    if (product.status === "failed") {
+      await onUpdate({ status: "approved", failReason: undefined });
+    }
     await onPublish();
     setPublishing(false);
   };
@@ -66,8 +87,11 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         <h3 className="title">{product.title}</h3>
 
         <div className="meta-row">
-          <span className="meta-item">📦 {product.soldCount?.toLocaleString()} vendidos</span>
-          <a href={product.sourceUrl} target="_blank" rel="noreferrer" className="source-link">Ver en eBay ↗</a>
+          {(product.soldCount ?? 0) > 0 && <span className="meta-item">📦 {product.soldCount.toLocaleString()} vendidos</span>}
+          {product.status === "published" && product.listingId
+            ? <a href={`https://www.ebay.com/itm/${product.listingId}`} target="_blank" rel="noreferrer" className="source-link">🛒 Ver mi listing ↗</a>
+            : <a href={product.sourceUrl} target="_blank" rel="noreferrer" className="source-link">Ver referencia ↗</a>
+          }
         </div>
 
         <div className="pricing">
@@ -144,7 +168,20 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             </>
           )}
           {product.status === "published" && (
-            <p className="published-info">Listing ID: {product.listingId ?? "—"}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+              <span className="published-info">✅ Publicado · ID {product.listingId}{product.bidPercentage ? ` · 📢 ${product.bidPercentage}% ads` : ""}</span>
+              <button className="btn btn-reject" onClick={handleDelist} disabled={delisting} title="Deslistar de eBay">
+                {delisting ? "..." : "🗑 Deslistar"}
+              </button>
+            </div>
+          )}
+          {product.status === "failed" && (
+            <div>
+              <p className="fail-reason">⚠️ {product.failReason ?? "Error desconocido"}</p>
+              <button className="btn btn-publish" style={{marginTop:"0.5rem"}} onClick={handlePublish} disabled={publishing}>
+                {publishing ? "Reintentando..." : "🔄 Reintentar"}
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -173,6 +210,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         .meta-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
         .meta-item { font-size: 0.78rem; color: #64748b; }
         .source-link { font-size: 0.75rem; color: #3b82f6; text-decoration: none; }
+        .fail-reason { font-size: 0.75rem; color: #f97316; margin: 0.5rem 0 0; line-height: 1.4; }
         .pricing { background: #111120; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem; }
         .price-row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
         .price-item { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; min-width: 70px; }

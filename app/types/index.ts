@@ -32,7 +32,9 @@ export interface QueueProduct {
   // Listing metadata
   condition:   string;
   sourceUrl:   string;
-  status:      "pending" | "approved" | "rejected" | "published";
+  status:      "pending" | "approved" | "rejected" | "published" | "failed";
+  failReason?:    string;
+  bidPercentage?: number;
   description: string;
   stock:       number;
 

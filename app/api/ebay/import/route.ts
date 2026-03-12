@@ -91,12 +91,12 @@ export async function POST(req: NextRequest) {
     } as Settings;
 
     const {
-      minPrice       = 15,
-      maxPrice       = 250,   // raised — DEFAULT_SETTINGS has 150 but import should be generous
-      markupPercent  = 40,
-      defaultStock   = 10,
-      onlyNewCondition = false, // disabled by default on manual import — user already chose these
+      minPrice         = 20,
+      maxPrice         = 500,
+      defaultStock     = 10,
+      onlyNewCondition = false,
     } = settings;
+    const markupPercent = 6; // fixed 6% to cover eBay fees
 
     const results = {
       added:    0,
@@ -220,7 +220,7 @@ export async function POST(req: NextRequest) {
           listingAgeDays:        0,
           condition,
           sourceUrl:             url,
-          status:                "pending",
+          status:                "approved", // auto-approved — skip review queue
           description:           "",
           stock:                 defaultStock,
           createdAt:             Date.now(),

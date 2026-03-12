@@ -8,14 +8,14 @@ import ProductCard from "@/components/product-card";
 import SearchBar from "@/components/search-bar";
 import StatsBar from "@/components/stats-bar";
 
-type TabType = "pending" | "approved" | "published" | "rejected";
+type TabType = "pending" | "approved" | "published" | "rejected" | "failed";
 
 export default function Dashboard() {
   const [products, setProducts] = useState<QueueProduct[]>([]);
   const [activeTab, setActiveTab] = useState<TabType>("pending");
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
-  const [stats, setStats] = useState({ pending: 0, approved: 0, published: 0, rejected: 0 });
+  const [stats, setStats] = useState({ pending: 0, approved: 0, published: 0, rejected: 0, failed: 0 });
 
   useEffect(() => {
     const q = query(
@@ -32,7 +32,7 @@ export default function Dashboard() {
   }, [activeTab]);
 
   useEffect(() => {
-    const statuses: TabType[] = ["pending", "approved", "published", "rejected"];
+    const statuses: TabType[] = ["pending", "approved", "published", "rejected", "failed"];
     const unsubs = statuses.map((status) =>
       onSnapshot(
         query(collection(db, "products_queue"), where("status", "==", status)),
@@ -133,11 +133,39 @@ export default function Dashboard() {
     if (data.error) alert("Error al publicar: " + data.error);
   };
 
+  const [publishingAll, setPublishingAll] = useState(false);
+  const [publishProgress, setPublishProgress] = useState({ done: 0, total: 0, errors: 0 });
+
+  const handlePublishAll = async () => {
+    if (!confirm(`¿Publicar todos los ${stats.approved} productos aprobados?`)) return;
+    setPublishingAll(true);
+    setPublishProgress({ done: 0, total: stats.approved, errors: 0 });
+    let done = 0, errors = 0;
+    for (const p of products) {
+      try {
+        const res = await fetch("/api/ebay/publish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ productId: p.id }),
+        });
+        const data = await res.json();
+        if (data.error) errors++;
+        else done++;
+      } catch { errors++; }
+      setPublishProgress({ done: done + errors, total: stats.approved, errors });
+      await new Promise(r => setTimeout(r, 500)); // small delay between publishes
+    }
+    setPublishingAll(false);
+    alert(`✅ Publicados: ${done} | ❌ Errores: ${errors}`);
+  };
+
+
   const tabs = [
     { key: "pending" as TabType, label: "Pendientes", color: "#f59e0b" },
     { key: "approved" as TabType, label: "Aprobados", color: "#10b981" },
     { key: "published" as TabType, label: "Publicados", color: "#3b82f6" },
     { key: "rejected" as TabType, label: "Rechazados", color: "#ef4444" },
+    { key: "failed" as TabType, label: "Fallidos", color: "#f97316" },
   ];
 
   const activeTabLabel = tabs.find((t) => t.key === activeTab)?.label?.toLowerCase() ?? "";
@@ -178,6 +206,25 @@ export default function Dashboard() {
           ))}
         </div>
 
+
+        {activeTab === "approved" && stats.approved > 0 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+            {publishingAll && (
+              <span style={{ color: "#64748b", fontSize: "0.85rem", marginRight: "1rem", alignSelf: "center" }}>
+                {publishProgress.done}/{publishProgress.total} publicados
+                {publishProgress.errors > 0 && ` · ${publishProgress.errors} errores`}
+              </span>
+            )}
+            <button
+              onClick={handlePublishAll}
+              disabled={publishingAll}
+              style={{ background: "#10b981", color: "#fff", border: "none", borderRadius: "8px", padding: "0.5rem 1.2rem", fontWeight: 600, cursor: publishingAll ? "not-allowed" : "pointer", opacity: publishingAll ? 0.6 : 1 }}
+            >
+              {publishingAll ? "Publicando..." : `🚀 Publicar Todos (${stats.approved})`}
+            </button>
+          </div>
+        )}
+
         <div className="products-grid">
           {loading ? (
             <div className="empty-state">
@@ -187,10 +234,10 @@ export default function Dashboard() {
           ) : products.length === 0 ? (
             <div className="empty-state">
               <span style={{ fontSize: "3rem" }}>
-                {activeTab === "pending" ? "🔍" : activeTab === "approved" ? "✅" : activeTab === "published" ? "🚀" : "❌"}
+                {activeTab === "pending" ? "🔍" : activeTab === "approved" ? "✅" : activeTab === "published" ? "🚀" : activeTab === "failed" ? "⚠️" : "❌"}
               </span>
               <p style={{ color: "#64748b", fontWeight: 600 }}>
-                {activeTab === "pending" ? "Cola vacía — busca productos arriba" : `No hay productos ${activeTabLabel}`}
+                {activeTab === "pending" ? "Cola vacía — busca productos arriba" : activeTab === "failed" ? "No hay productos fallidos ✅" : `No hay productos ${activeTabLabel}`}
               </p>
             </div>
           ) : (

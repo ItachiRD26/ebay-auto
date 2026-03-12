@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchProducts, getUserToken } from "@/lib/ebay";
 import { db, COLLECTIONS } from "@/lib/firebase";
 import { QueueProduct } from "@/types";
+import { publishProductById, markPublishFailed } from "@/lib/publish";
 
 // ─── Dropshipping config ──────────────────────────────────────────────────────
 const CONFIG = {
@@ -54,10 +55,6 @@ const AUTO_KEYWORDS = [
   "baby bottle set","diaper bag","baby gate",
   "baby bath seat","stroller organizer","kids puzzle",
   "fidget toys","sensory toys","baby nasal aspirator",
-  // Car
-  "car phone mount","car organizer","car seat cover",
-  "car air freshener","dash cam","car vacuum cleaner",
-  "steering wheel cover","car trash can","car cup holder",
   // Garden & Outdoor
   "garden tools set","plant pots set","garden gloves",
   "solar lights outdoor","hose nozzle","succulent pots",
@@ -66,22 +63,39 @@ const AUTO_KEYWORDS = [
   "packing cubes","luggage tag","travel pillow",
   "travel bottles set","passport holder","travel toiletry bag",
   "neck pillow","luggage scale","travel adapter",
-  // Tools
-  "tool set","screwdriver set","measuring tape",
-  "level tool","drill bit set","stud finder",
-  "utility knife","socket set",
 ];
 
 const EXCLUDED_KEYWORDS = [
+  // Tech brands
   "iphone","samsung galaxy","apple watch","airpods","macbook","playstation","xbox",
   "nintendo switch","nvidia","radeon","graphics card","laptop","smart tv","ipad",
+  // Fashion brands
   "nike","adidas","gucci","louis vuitton","supreme","yeezy","jordan","off-white",
-  "balenciaga","versace","prada","dior","burberry","chanel","hermes","fendi",
+  "balenciaga","versace","prada","dior","burberry","chanel","hermes","fendi","lululemon",
+  "north face","under armour","new balance","reebok","vans","converse","timberland",
+  // Water bottle brands
+  "owala","stanley cup","hydro flask","yeti","contigo","nalgene","camelbak",
+  // Anime
+  "anime","manga","naruto","dragon ball","one piece","demon slayer","attack on titan","pokemon","waifu",
+  // Auto brands
+  "mercedes","mercedes-benz","bmw","audi","porsche","ferrari","lamborghini","maserati",
+  "ford","chevrolet","chevy","dodge","jeep","tesla","honda","toyota","nissan","hyundai",
+  "volkswagen","volvo","lexus","infiniti","cadillac","buick","lincoln","ram truck",
+  "subaru","mazda","mitsubishi","kia","acura","genesis","alfa romeo","bentley","rolls royce",
+  // General brand protection
   "replica","counterfeit","fake","gun","firearm","ammo","ammunition","rifle","pistol",
+  // Food & Plants (cannot dropship)
+  "food","snack","candy","chocolate","coffee beans","tea leaves","protein powder",
+  "supplement","vitamin","seeds","plant","succulent","cactus","flower bouquet",
+  "live plant","fruit","vegetable","edible","organic food","gummies","jerky",
+  "spices","herbs","seasoning","powder drink","energy drink","juice",
 ];
 
+// Auto-generated from EXCLUDED_KEYWORDS — checks title for any brand mention
+
 function isBanned(title: string): boolean {
-  return EXCLUDED_KEYWORDS.some((kw) => title.toLowerCase().includes(kw));
+  const t = title.toLowerCase();
+  return EXCLUDED_KEYWORDS.some((kw) => t.includes(kw.toLowerCase()));
 }
 
 function extractNumericId(browseItemId: string): string {
@@ -144,17 +158,9 @@ function calcPricing(item: Record<string, unknown>): PricingResult {
   const ebayShippingCost = getShippingCost(item);
   const totalMarketCost  = ebayRefPrice + ebayShippingCost;
 
-  // We want to match or beat the total cost the buyer sees on the reference listing.
-  // Price 3% below that total to be competitive (we offer FREE shipping).
-  let suggestedSellingPrice = parseFloat((totalMarketCost * 0.97).toFixed(2));
-
-  // Floor: must at minimum cover average Eprolo shipping + a $2 buffer.
-  // (real product cost will be added once Eprolo lookup runs)
+  // 6% markup over total market cost (covers eBay fees + margin)
+  const suggestedSellingPrice = parseFloat((totalMarketCost * 1.06).toFixed(2));
   const priceFloor = CONFIG.EPROLO_SHIP_AVG + 2;
-  if (suggestedSellingPrice < priceFloor) {
-    suggestedSellingPrice = parseFloat(totalMarketCost.toFixed(2)); // stay at market if too thin
-  }
-
   return { ebayRefPrice, ebayShippingCost, totalMarketCost, suggestedSellingPrice, priceFloor };
 }
 
@@ -278,7 +284,7 @@ function notChina(country: string | null | undefined): boolean {
 async function processItem(
   item: Record<string, unknown>,
   label: string,
-): Promise<boolean> {
+): Promise<string | false> {
   const title      = (item.title as string) ?? "";
   const itemId     = item.itemId as string;
   const numericId  = extractNumericId(itemId);
@@ -368,15 +374,16 @@ async function processItem(
     listingAgeDays:        Math.round(td.listingAgeDays),
     condition:             (item.condition as string) ?? "New",
     sourceUrl:             itemUrl,
-    status:                "pending",
+    status:                "approved",
     description:           "",
     stock:                 CONFIG.STOCK,
     createdAt:             Date.now(),
     updatedAt:             Date.now(),
   };
 
-  await db.collection(COLLECTIONS.QUEUE).doc().set(queueProduct);
-  return true;
+  const docRef = db.collection(COLLECTIONS.QUEUE).doc();
+  await docRef.set({ ...queueProduct, status: "approved" });
+  return docRef.id; // return ID for auto-publish
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
@@ -386,12 +393,30 @@ export async function POST(req: NextRequest) {
     const { keywords, limit = 50, autoSearch = false } = body;
 
     let totalAdded = 0;
+    let totalPublished = 0;
+
+    // Get user token for auto-publishing
+    const tokenDoc = await db.collection("tokens").doc("ebay_user").get();
+    const userToken = tokenDoc.exists ? tokenDoc.data()!.access_token : null;
+    if (!userToken) console.warn("[search] No user token — products will be saved but NOT published");
+
+    const autoPublish = async (productId: string) => {
+      if (!userToken) return;
+      try {
+        await publishProductById(productId, userToken);
+        totalPublished++;
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        console.error(`[search] ❌ Auto-publish failed for ${productId}: ${reason}`);
+        await markPublishFailed(productId, reason);
+      }
+    };
 
     if (autoSearch) {
       console.log(`\n🔄 Auto-búsqueda — ${AUTO_KEYWORDS.length} keywords`);
       console.log(`📋 $${CONFIG.MIN_PRICE}-$${CONFIG.MAX_PRICE} | min ${CONFIG.MIN_SOLD_30D} ventas/30d | China only\n`);
 
-      for (const kw of AUTO_KEYWORDS) {
+      for (const kw of [...AUTO_KEYWORDS].reverse()) {
         try {
           console.log(`\n🔑 "${kw}"`);
           const result = await searchProducts(kw, 20);
@@ -399,18 +424,21 @@ export async function POST(req: NextRequest) {
           console.log(`   ${items.length} items`);
 
           for (const item of items) {
-            const added = await processItem(item, kw);
-            if (added) totalAdded++;
-            await new Promise((r) => setTimeout(r, 300));
+            const productId = await processItem(item, kw);
+            if (productId) {
+              totalAdded++;
+              await autoPublish(productId);
+            }
+            await new Promise((r) => setTimeout(r, 3000)); // 3s between listings
           }
 
-          await new Promise((r) => setTimeout(r, 500));
+          await new Promise((r) => setTimeout(r, 2000)); // 2s between keywords
         } catch (e) {
           console.error(`❌ Error "${kw}":`, e);
         }
       }
 
-      console.log(`\n✅ Auto-búsqueda completada. Total: ${totalAdded}`);
+      console.log(`\n✅ Auto-búsqueda completada. Guardados: ${totalAdded} | Publicados: ${totalPublished}`);
 
     } else {
       if (!keywords) return NextResponse.json({ error: "keywords required" }, { status: 400 });
@@ -423,15 +451,18 @@ export async function POST(req: NextRequest) {
       console.log(`📦 ${items.length} items\n`);
 
       for (const item of items) {
-        const added = await processItem(item, keywords);
-        if (added) totalAdded++;
-        await new Promise((r) => setTimeout(r, 300));
+        const productId = await processItem(item, keywords);
+        if (productId) {
+          totalAdded++;
+          await autoPublish(productId);
+        }
+        await new Promise((r) => setTimeout(r, 3000)); // 3s between listings
       }
 
-      console.log(`\n📊 "${keywords}": ${totalAdded}/${items.length} aceptados`);
+      console.log(`\n📊 "${keywords}": ${totalAdded} guardados, ${totalPublished} publicados`);
     }
 
-    return NextResponse.json({ success: true, added: totalAdded });
+    return NextResponse.json({ success: true, added: totalAdded, published: totalPublished });
 
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
