@@ -39,7 +39,10 @@ export async function getAppToken(): Promise<string> {
     throw new Error(`App token error: ${err}`);
   }
 
-  const data = await res.json();
+  const tokenText = await res.text();
+  let data: Record<string, string & number>;
+  try { data = JSON.parse(tokenText); }
+  catch { throw new Error(`App token invalid JSON: ${tokenText.slice(0, 200)}`); }
   appTokenCache = {
     token: data.access_token,
     expiresAt: Date.now() + data.expires_in * 1000,
@@ -82,9 +85,11 @@ export async function getUserToken(): Promise<string> {
     ].join("&"),
   });
 
-  if (!res.ok) throw new Error("No se pudo renovar el token de eBay.");
-
-  const data = await res.json();
+  const refreshText = await res.text();
+  if (!res.ok) throw new Error(`No se pudo renovar el token de eBay: ${refreshText.slice(0, 200)}`);
+  let data: Record<string, string & number>;
+  try { data = JSON.parse(refreshText); }
+  catch { throw new Error(`Refresh token invalid JSON: ${refreshText.slice(0, 200)}`); }
   await db
     .collection((COLLECTIONS as Record<string, string>)["TOKENS"] ?? "tokens")
     .doc("ebay_user")
@@ -123,12 +128,13 @@ export async function searchProducts(keywords: string, limit = 50) {
     }
   );
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Browse API error: ${err}`);
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Browse API error (${res.status}): ${text.slice(0, 200)}`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Browse API returned invalid JSON: ${text.slice(0, 200)}`);
   }
-
-  return res.json();
 }
 
 // ─── Marketing API: Best-Selling Products by Category ────────────────────────
@@ -370,7 +376,9 @@ export async function createOffer(
     throw new Error(`createOffer failed (${statusCode}): ${resBody.slice(0, 300)}`);
   }
 
-  const data = JSON.parse(resBody);
+  let data: Record<string, string>;
+  try { data = JSON.parse(resBody); }
+  catch { throw new Error(`createOffer invalid JSON: ${resBody.slice(0, 200)}`); }
   return { offerId: data.offerId };
 }
 
@@ -396,7 +404,9 @@ export async function publishOffer(
     throw new Error(`publishOffer failed (${statusCode}): ${resBody.slice(0, 300)}`);
   }
 
-  const data = JSON.parse(resBody || "{}");
+  let data: Record<string, string> = {};
+  try { if (resBody) data = JSON.parse(resBody); }
+  catch { throw new Error(`publishOffer invalid JSON: ${resBody.slice(0, 200)}`); }
   return { listingId: data.listingId };
 }
 // ─── Trading API: Get full item details including ItemSpecifics ───────────────

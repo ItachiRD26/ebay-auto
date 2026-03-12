@@ -421,7 +421,13 @@ export async function POST(req: NextRequest) {
         try {
           updateProgress({ keyword: kw });
           console.log(`\n🔑 "${kw}"`);
-          const result = await searchProducts(kw, 20);
+          let result: { itemSummaries?: unknown[] };
+          try {
+            result = await searchProducts(kw, 20);
+          } catch (searchErr) {
+            console.warn(`[search] ⚠️ Skipping keyword "${kw}":`, searchErr instanceof Error ? searchErr.message : searchErr);
+            continue;
+          }
           const items  = (result.itemSummaries ?? []) as Record<string, unknown>[];
           console.log(`   ${items.length} items`);
 
