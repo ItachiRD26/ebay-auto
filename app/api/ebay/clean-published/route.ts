@@ -19,6 +19,17 @@ const EXCLUDED_KEYWORDS = [
   "volkswagen","volvo","lexus","infiniti","cadillac","buick","lincoln","ram truck",
   "subaru","mazda","mitsubishi","kia","acura","genesis","alfa romeo","bentley","rolls royce",
   "replica","counterfeit","fake","gun","firearm","ammo","ammunition","rifle","pistol",
+  // Clothing & lifestyle brands
+  "polo","ralph lauren","lacoste","tommy hilfiger","calvin klein","hugo boss",
+  "michael kors","coach","kate spade","marc jacobs","tommy","nautica","izod",
+  // Generic female names used as brands
+  "charlotte","victoria secret","victoria's secret","fredericks","fredericks of hollywood",
+  // Car care & detailing brands/products
+  "maxlone","meguiar","turtle wax","armor all","mothers","chemical guys",
+  "car spray","car wax","car polish","car detailing","car cleaner","car shampoo",
+  "waterless wash","quick detailer","paint sealant","ceramic coat","car coating",
+  "car freshener","car deodorizer","windshield cleaner","wheel cleaner","tire shine",
+  "triphene","spray wipe","car care","auto care","auto detailing",
   "starbucks","nespresso","keurig","nescafe","lavazza","dunkin","red bull","monster energy",
   "coca cola","pepsi","heineken","corona","budweiser","jack daniels","johnnie walker",
   "face cream","moisturizer","serum","perfume","cologne","deodorant","antiperspirant",
@@ -67,7 +78,8 @@ const EXCLUDED_KEYWORDS = [
   "supplement","vitamin","seeds","plant","succulent","cactus","flower bouquet",
   "live plant","fruit","vegetable","edible","gummies","jerky","spices","herbs","seasoning",
   "car seat cover","car organizer","car phone mount","dash cam","car vacuum",
-  "steering wheel cover","windshield, star wars, Milwaukee, phone case, samsung case, iphone case, ipad case, Graded Coin, laptop case, macbook case, airpods case, marvel, Marvel Rivals, dc, DC Multiverse, funko pop, funko figure, pop vinyl, pop figure, action figure, collectible figure, comic book figure",];
+  "steering wheel cover","windshield",
+];
 
 function isBanned(title: string): boolean {
   const t = title.toLowerCase();

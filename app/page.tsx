@@ -8,7 +8,7 @@ import ProductCard from "@/components/product-card";
 import SearchBar from "@/components/search-bar";
 import StatsBar from "@/components/stats-bar";
 
-type TabType = "pending" | "approved" | "published" | "rejected" | "failed";
+type TabType = "pending" | "approved" | "published" | "rejected" | "failed" | "sellers";
 
 export default function Dashboard() {
   const [products, setProducts] = useState<QueueProduct[]>([]);
@@ -19,9 +19,21 @@ export default function Dashboard() {
   const [promoting, setPromoting] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const [cleanResult, setCleanResult] = useState<{delisted:number,checked:number} | null>(null);
+  const [storeUrl, setStoreUrl] = useState("");
+  const [discoveringSellers, setDiscoveringSellers] = useState(false);
+  const [discoveredSellers, setDiscoveredSellers] = useState<Array<{username:string,storeUrl:string,userUrl:string,totalListings:number,sampleTitles:string[]}> | null>(null);
+  const [savedSellers, setSavedSellers] = useState<Array<{id:string,username:string,storeUrl:string,userUrl:string,totalListings:number,sampleTitles:string[],category:string}>>([]);
+  const [sellersLoaded, setSellersLoaded] = useState(false);
+  const [scanningCategory, setScanningCategory] = useState<string|null>(null);
+  const [categories] = useState([
+    "🍳 Cocina","🧹 Limpieza","🚿 Baño","🚗 Auto",
+    "📱 Tech Accesorios","✈️ Viaje","🐾 Mascotas","🏠 Decoracion","Viral / Trendy"
+  ]);
+  const [importingStore, setImportingStore] = useState(false);
+  const [importStoreResult, setImportStoreResult] = useState<{seller:string,added:number,checked:number} | null>(null);
   const pauseRef = useRef(false);
   const [searchProgress, setSearchProgress] = useState<{reviewed:number;passed:number;published:number;failed:number;keyword:string;keywords:{done:number;total:number}} | null>(null);
-  const [stats, setStats] = useState({ pending: 0, approved: 0, published: 0, rejected: 0, failed: 0 });
+  const [stats, setStats] = useState<Record<TabType, number>>({ pending: 0, approved: 0, published: 0, rejected: 0, failed: 0, sellers: 0 });
 
   useEffect(() => {
     const q = query(
@@ -203,6 +215,58 @@ export default function Dashboard() {
   };
 
 
+  const loadSavedSellers = async () => {
+    const res = await fetch("/api/ebay/discover-sellers");
+    const data = await res.json();
+    if (data.sellers) { setSavedSellers(data.sellers); setSellersLoaded(true); }
+  };
+
+  const handleScanCategory = async (category?: string) => {
+    setScanningCategory(category ?? "all");
+    try {
+      const res = await fetch("/api/ebay/discover-sellers", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category }),
+      });
+      const data = await res.json();
+      if (data.error) alert("Error: " + data.error);
+      else await loadSavedSellers();
+    } finally {
+      setScanningCategory(null);
+    }
+  };
+
+  const handleDeleteSeller = async (username: string) => {
+    await fetch("/api/ebay/discover-sellers", {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    });
+    setSavedSellers(s => s.filter(x => x.username !== username));
+  };
+
+  const handleDiscoverSellers = async () => { setActiveTab("sellers" as TabType); await loadSavedSellers(); };
+
+  const handleImportStore = async (categoryOverride?: string) => {
+    if (!storeUrl.trim()) return;
+    setImportingStore(true);
+    setImportStoreResult(null);
+    try {
+      const res = await fetch("/api/ebay/import-store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storeUrl: storeUrl.trim(), category: categoryOverride }),
+      });
+      const data = await res.json();
+      if (data.error) alert("Error: " + data.error);
+      else {
+        setImportStoreResult({ seller: data.seller, added: data.added, checked: data.checked });
+        setStoreUrl("");
+      }
+    } finally {
+      setImportingStore(false);
+    }
+  };
+
   const handleCleanPublished = async () => {
     if (!confirm("¿Revisar todos los listings publicados y deslistar los que tengan keywords baneadas?")) return;
     setCleaning(true);
@@ -238,9 +302,12 @@ export default function Dashboard() {
     { key: "published" as TabType, label: "Publicados", color: "#3b82f6" },
     { key: "rejected" as TabType, label: "Rechazados", color: "#ef4444" },
     { key: "failed" as TabType, label: "Fallidos", color: "#f97316" },
+    { key: "sellers" as TabType, label: "Vendedores CN", color: "#a855f7" },
   ];
 
   const activeTabLabel = tabs.find((t) => t.key === activeTab)?.label?.toLowerCase() ?? "";
+  // Load saved sellers when switching to sellers tab
+  if (activeTab === "sellers" && !sellersLoaded) loadSavedSellers();
 
   return (
     <div className="dashboard">
@@ -293,6 +360,29 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* ── Import Store ── */}
+        <div style={{ display:"flex", gap:"0.6rem", alignItems:"center", marginBottom:"1rem", flexWrap:"wrap" }}>
+          <input
+            type="text"
+            placeholder="URL de tienda eBay — ebay.com/str/vendedor o ebay.com/usr/vendedor"
+            value={storeUrl}
+            onChange={e => { setStoreUrl(e.target.value); setImportStoreResult(null); }}
+            onKeyDown={e => e.key === "Enter" && !importingStore && handleImportStore()}
+            style={{ flex:1, minWidth:280, padding:"0.5rem 0.8rem", borderRadius:"8px", border:"1px solid #2d3348", background:"#0d0d14", color:"#e2e8f0", fontSize:"0.85rem", outline:"none" }}
+          />
+          <button onClick={() => handleImportStore()} disabled={importingStore || !storeUrl.trim()}
+            style={{ flexShrink:0, padding:"0.5rem 1.1rem", background:"#0ea5e9", color:"#fff", border:"none", borderRadius:"8px", fontWeight:600, cursor:importingStore||!storeUrl.trim()?"not-allowed":"pointer", opacity:importingStore||!storeUrl.trim()?0.5:1, fontSize:"0.85rem" }}>
+            {importingStore ? "⏳ Importando..." : "🏪 Importar tienda"}
+          </button>
+          {importStoreResult && (
+            <span style={{ fontSize:"0.82rem", color:"#10b981" }}>
+              ✅ <strong>{importStoreResult.seller}</strong> — {importStoreResult.added} agregados de {importStoreResult.checked} revisados → tab Aprobados
+            </span>
+          )}
+        </div>
+
+
+
         <div className="tabs">
           {tabs.map((tab) => (
             <button
@@ -329,6 +419,70 @@ export default function Dashboard() {
             </button>
           </div>
         )}
+        {activeTab === "sellers" && (
+          <div style={{ padding:"1rem 0" }}>
+            {/* Category scan buttons */}
+            <div style={{ display:"flex", flexWrap:"wrap", gap:"0.5rem", marginBottom:"1.25rem" }}>
+              <button onClick={() => handleScanCategory(undefined)} disabled={!!scanningCategory}
+                style={{ padding:"0.4rem 1rem", background:"#a855f7", color:"#fff", border:"none", borderRadius:"7px", fontWeight:600, cursor:scanningCategory?"not-allowed":"pointer", opacity:scanningCategory?0.5:1, fontSize:"0.82rem" }}>
+                {scanningCategory === "all" ? "⏳ Escaneando todo..." : "🔎 Escanear todas las categorías"}
+              </button>
+              {categories.map(cat => (
+                <button key={cat} onClick={() => handleScanCategory(cat)} disabled={!!scanningCategory}
+                  style={{ padding:"0.4rem 0.85rem", background: scanningCategory===cat?"#7c3aed":"#1e2235", color: scanningCategory===cat?"#fff":"#94a3b8", border:"1px solid #2d3348", borderRadius:"7px", cursor:scanningCategory?"not-allowed":"pointer", fontSize:"0.8rem" }}>
+                  {scanningCategory === cat ? "⏳ ..." : cat}
+                </button>
+              ))}
+            </div>
+
+            {/* Saved sellers grouped by category */}
+            {savedSellers.length === 0 && !scanningCategory && (
+              <div style={{ textAlign:"center", color:"#475569", padding:"2rem" }}>
+                No hay vendedores guardados — escanea una categoría para encontrar vendedores CN con 100-5,000 listings
+              </div>
+            )}
+            {(() => {
+              const grouped: Record<string, typeof savedSellers> = {};
+              for (const s of savedSellers) { if (!grouped[s.category]) grouped[s.category] = []; grouped[s.category].push(s); }
+              return Object.entries(grouped).map(([cat, sellers]) => (
+                <div key={cat} style={{ marginBottom:"1.5rem" }}>
+                  <div style={{ fontSize:"0.85rem", fontWeight:700, color:"#a855f7", marginBottom:"0.5rem", letterSpacing:"0.05em" }}>{cat}</div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:"0.4rem" }}>
+                    {sellers.map(s => (
+                      <div key={s.username} style={{ display:"flex", alignItems:"center", gap:"0.75rem", padding:"0.6rem 0.9rem", background:"#0d0d14", border:"1px solid #1e2235", borderRadius:"8px", flexWrap:"wrap" }}>
+                        <strong style={{ color:"#e2e8f0", minWidth:150, fontSize:"0.88rem" }}>{s.username}</strong>
+                        <span style={{ fontSize:"0.78rem", color:"#10b981", minWidth:80 }}>{s.totalListings.toLocaleString()} listings</span>
+                        <span style={{ fontSize:"0.73rem", color:"#475569", flex:1 }}>{s.sampleTitles?.[0] ?? ""}</span>
+                        <button onClick={async () => {
+                            setStoreUrl(s.userUrl);
+                            setImportingStore(true);
+                            setActiveTab("approved" as TabType);
+                            try {
+                              const res = await fetch("/api/ebay/import-store", {
+                                method:"POST", headers:{"Content-Type":"application/json"},
+                                body: JSON.stringify({ storeUrl: s.userUrl, category: s.category }),
+                              });
+                              const data = await res.json();
+                              if (data.error) alert("Error: " + data.error);
+                              else setImportStoreResult({ seller: data.seller, added: data.added, checked: data.checked });
+                            } finally { setImportingStore(false); }
+                          }}
+                          style={{ fontSize:"0.75rem", padding:"0.25rem 0.7rem", background:"#0ea5e9", color:"#fff", border:"none", borderRadius:"5px", cursor:"pointer", whiteSpace:"nowrap" }}>
+                          {importingStore ? "⏳..." : "📥 Importar"}
+                        </button>
+                        <button onClick={() => handleDeleteSeller(s.username)}
+                          style={{ fontSize:"0.75rem", padding:"0.25rem 0.6rem", background:"#1e2235", color:"#ef4444", border:"1px solid #2d3348", borderRadius:"5px", cursor:"pointer" }}>
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+        )}
+
         {activeTab === "approved" && stats.approved > 0 && (
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
             {publishingAll && (

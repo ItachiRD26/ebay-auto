@@ -162,6 +162,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             <>
               <button className="btn btn-edit" onClick={() => setEditing(!editing)}>{editing ? "✕" : "✏ Editar"}</button>
               {editing && <button className="btn btn-save" onClick={handleSave}>💾</button>}
+              <button className="btn btn-reject" onClick={onReject} title="No aprobar — mover a rechazados">✕ No listar</button>
               <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
                 {publishing ? "Publicando..." : "🚀 Publicar en eBay"}
               </button>

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchProducts, getUserToken } from "@/lib/ebay";
 import { db, COLLECTIONS } from "@/lib/firebase";
 import { QueueProduct } from "@/types";
-import { publishProductById, markPublishFailed } from "@/lib/publish";
 
 // ─── Dropshipping config ──────────────────────────────────────────────────────
 const CONFIG = {
@@ -18,136 +17,62 @@ const CONFIG = {
 
 // ─── Keyword list for auto-search ────────────────────────────────────────────
 const AUTO_KEYWORDS = [
-  // Organization & Storage
-  "caddy","canister","compartment","organizerbox","sorter","keeper","stash",
-  "slot","holderrack","tier","layer","locker","cabinet","organizertray",
-  "stacker","tote","cubby","pocket","carrier","wrapcase","keeperbox",
+  // COCINA VIRAL / UTIL
+  "kitchen gadget","slicer","chopper","cutter","peeler","grater",
+  "strainer","colander","opener","dispenser","oil sprayer",
+  "food storage","lunch box","meal prep","silicone lid",
+  "air fryer accessory","sink organizer","drying rack",
 
-  // Home & Living
-  "decor","ornament","accent","display","centerpiece","tabletop","backdrop",
-  "panel","board","plaque","tile","strip","plate","paneling","liner",
-  "overlay","insert","fixture","panelcover","trim","edging","border",
+  // LIMPIEZA TOP VENTAS
+  "cleaning brush","electric scrubber","spin brush","dust remover",
+  "lint remover","pet hair remover","window cleaner","squeegee",
+  "microfiber","mop head","magic sponge","drain cleaner",
 
-  // Mounting / Hardware
-  "anchor","clamp","grip","latch","catch","pin","peg","loop","band",
-  "strap","ring","bolt","stud","bar","rail","pole","rod","arm",
-  "post","hinge","lock","cap","stopper","sealring","plug",
+  // BAÑO
+  "shower caddy","soap holder","toothbrush holder","towel rack",
+  "bath mat","non slip mat","toilet organizer","dispenser set",
 
-  // Kitchen & Household Tools
-  "ladle","masher","crusher","skimmer","shaker","baster","dripper",
-  "infuser","sprayer","spreader","pincer","stirrer","twister","flipper",
-  "rollerpin","grinder","sifter","separator","breaker","twirl",
+  // AUTO
+  "car organizer","seat gap filler","car hook","phone mount",
+  "car trash can","car storage","sunshade","steering cover",
 
-  // Containers & Drinkware
-  "canteen","flask","pitcher","jug","decanter","thermos","kettle",
-  "carafe","dispenserjar","drinkholder","beaker","minijar","pourer",
+  // TECH ACCESORIOS GENERICOS
+  "phone stand","tablet stand","cable organizer","charging dock",
+  "desk organizer","laptop stand","mouse pad","led strip",
 
-  // Cleaning & Maintenance
-  "polisher","sweeper","lintroller","dustpan","cloth","wipe","rag",
-  "absorber","refill","spraybottle","mistbottle","washer","rinser",
+  // VIAJE / UTILIDAD
+  "travel organizer","packing cube","compression bag",
+  "toiletry bag","passport holder","luggage tag",
 
-  // Bathroom / Utility
-  "soapdish","soaptray","toothholder","cupholder","tissueholder",
-  "toothcup","rinsecup","brushholder","paperholder","washbin",
+  // MASCOTAS (MUY BUEN NICHO)
+  "pet feeder","pet water bottle","dog toy","cat toy",
+  "pet grooming","fur remover","pet bed","pet bowl",
 
-  // Furniture / Home Accessories
-  "footrest","armrest","headrest","seatpad","benchpad","linerpad",
-  "chairpad","tablepad","protector","guard","edgeguard",
+  // DECORACION SIMPLE
+  "wall decor","floating shelf","plant hanger","planter",
+  "vase","led light","night light","ambient light",
 
-  // Misc useful product nouns
-  "kit","set","bundle","pack","bundlepack","multi","combo",
-  "portable","foldable","extendable","adjuster","adapter",
-  "inserttray","dividertray","organizergrid","rackstand"
+  // TRENDY / VIRAL PALABRAS MAGICAS
+  "multi function","adjustable","portable","reusable",
+  "self adhesive","automatic","smart","mini","compact"
 ];
 
-const EXCLUDED_KEYWORDS = [
-  // Tech brands
-  "iphone","samsung galaxy","apple watch","airpods","macbook","playstation","xbox",
-  "nintendo switch","nvidia","radeon","graphics card","laptop","smart tv","ipad",
-  // Fashion brands
+const EXCLUDED_KEYWORDS: string[] = [
+  // ── Major brands ──────────────────────────────────────────────────────────
+  "iphone","samsung galaxy","apple watch","airpods","macbook","ipad",
+  "playstation","xbox","nintendo switch","nvidia","radeon",
   "nike","adidas","gucci","louis vuitton","supreme","yeezy","jordan","off-white",
-  "balenciaga","versace","prada","dior","burberry","chanel","hermes","fendi","lululemon",
-  "north face","under armour","new balance","reebok","vans","converse","timberland",
-  // Water bottle brands
-  "owala","stanley cup","hydro flask","yeti","contigo","nalgene","camelbak",
-  // Anime
-  "anime","manga","naruto","dragon ball","one piece","demon slayer","attack on titan","pokemon","waifu",
-  "tony chopper","luffy","zoro","nami","sanji","nico robin","franky","brook","usopp",
-  "playmat","playing mat","trading card game mat","tcg mat","ccg mat","card game mat",
-  "opcg","tcg","ccg","yugioh","yu-gi-oh","magic the gathering","mtg","flesh and blood",
-  "dragon shield","ultra pro","card sleeve","card mat","card game","board game mat",
-  // Auto brands
-  "mercedes","mercedes-benz","bmw","audi","porsche","ferrari","lamborghini","maserati",
-  "ford","chevrolet","chevy","dodge","jeep","tesla","honda","toyota","nissan","hyundai",
-  "volkswagen","volvo","lexus","infiniti","cadillac","buick","lincoln","ram truck",
-  "subaru","mazda","mitsubishi","kia","acura","genesis","alfa romeo","bentley","rolls royce",
-  // General brand protection
-  "replica","counterfeit","fake","gun","firearm","ammo","ammunition","rifle","pistol",
-  // Food & beverage brands
-  "starbucks","nespresso","keurig","nescafe","lavazza","dunkin","red bull","monster energy",
-  "coca cola","pepsi","heineken","corona","budweiser","jack daniels","johnnie walker",
-  // Beauty consumables (creams, perfumes, deodorants — usually branded)
-  "face cream","moisturizer","serum","perfume","cologne","deodorant","antiperspirant",
-  "body lotion","body cream","sunscreen","spf","retinol","vitamin c cream","eye cream",
-  "anti-aging","anti aging","wrinkle","dark spot","whitening cream","bleaching",
-  "toner","essence","ampoule","bb cream","cc cream","foundation","concealer",
-  "lipstick","lip gloss","eyeshadow","mascara","blush","highlighter","powder makeup",
-  "hair dye","hair color","keratin","shampoo","conditioner","hair mask","hair oil",
-  "body wash","shower gel","bath bomb","soap bar","hand cream","foot cream",
-  // Electronics components & wiring
-  "wire","cable","awg","stranded","insulated","pvc wire","coaxial","ethernet cable",
-  "breadboard","arduino","raspberry pi","esp32","sensor","module","led strip driver",
-  "battery pack","lithium","18650","charger module","buck converter","voltage",
-  "oscilloscope","multimeter","soldering","flux","pcb board","prototype",
-  // Toys & toy parts
-  "toy","lego","action figure","doll","barbie","stuffed animal","toy car","toy gun",
-  "toy part","toy accessory","playset","building block",
-  // Adult / sexual
-  "dildo","vibrator","sex toy","anal","butt plug","penis","enlargement","erection",
-  "male enhancement","adult toy","lubricant","condom","lingerie",
-  // Spare parts & electronics components
-  "pump","diaphragm","impeller","valve","compressor","capacitor","resistor","transistor",
-  "motherboard","circuit","pcb","ic chip","relay","solenoid","actuator","servo",
-  "replacement part","spare part","repair kit","oem","aftermarket","compatible with",
-  "for model","series part","assembly kit","wiring harness","fuse","transformer",
-  "power supply","inverter","regulator","heat sink","thermal paste","solder",
-  "connector","terminal","fitting","coupling","manifold","nozzle","gasket","seal",
-  // Medical / personal health devices
-  "catheter","incontinence","colostomy","stoma","dialysis","surgical",
-  "hearing aid","cpap","nebulizer","syringe","insulin",
-  "dental","dentist","orthodontic","tooth whitening","teeth whitening","mouthguard",
-  "retainer","braces","aligner","whitening strips","dental bib","tooth paste","toothpaste",
-  // Adult enhancement / sexual wellness devices
-  "extender","traction device","stretcher penis","male enlarger","penis pump",
-  "pro extender","apexdrive","apex drive","bigger growth","penile",
-  "erectile","male enhancement device","cock ring","chastity",
-  // Electronic massage devices & body stimulators
-  "electric massager","massage gun","percussion massager","vibrating massager",
-  "body massager","handheld massager","muscle massager","deep tissue massager",
-  "tens unit","ems machine","muscle stimulator","electro stimulator",
-  "infrared massager","heating massager","foot massager","neck massager",
-  "back massager","eye massager","scalp massager electric","massage wand",
-  // Medical & clinical
-  "compression sleeve","medical grade","orthopedic","therapeutic","clinical",
-  "blood pressure","pulse oximeter","glucose","ecg","ekg","stethoscope",
-  "thermometer medical","wound care","bandage","splint","brace medical",
-  // Skincare & cosmetic treatments (high return rate)
-  "retinol","vitamin c serum","hyaluronic","niacinamide","peptide cream",
-  "kojic acid","salicylic","glycolic","aha bha","chemical peel","microneedling",
-  "derma roller","led face mask","microcurrent","rf skin","ultrasonic skin",
-  "anti wrinkle device","skin tightening","photon therapy","collagen machine",
-  "ipl hair removal","laser hair","epilation device","hair removal device",
-  // Toy parts, upgrade kits, action figure accessories
-  "upgrade kit","3d printed","head upgrade","weapon kit","arm upgrade","wing kit",
-  "transformers","optimus prime","megatron","gundam","model kit","figure kit",
-  "resin kit","conversion kit","add-on kit","parts kit","custom part",
-  "injection molding","abs upgrade","pvc figure","diecast","figurine kit",
-  "killing arm","onyx prime","ss86","age of the primes",
-  // Food & Plants (cannot dropship)
-  "food","snack","candy","chocolate","coffee beans","tea leaves","protein powder",
-  "supplement","vitamin","seeds","plant","succulent","cactus","flower bouquet",
-  "live plant","fruit","vegetable","edible","organic food","gummies","jerky",
-  "spices","herbs","seasoning","powder drink","energy drink","juice",
+  "balenciaga","versace","prada","dior","burberry","chanel","hermes","fendi",
+  "lululemon","north face","under armour","new balance","reebok","vans","converse",
+  "timberland","owala","stanley cup","hydro flask","yeti","contigo","camelbak",
+  "ralph lauren","lacoste","tommy hilfiger","calvin klein","hugo boss",
+  "michael kors","coach","kate spade","marc jacobs","victoria secret",
+  "lego","barbie","disney","marvel","pokemon","naruto","one piece","dragon ball",
+  "rolex","omega watch","cartier","tiffany",
+  // ── Sexual / adult ────────────────────────────────────────────────────────
+  "dildo","vibrator","sex toy","anal","butt plug","penis enlargement",
+  "male enhancement","adult toy","erection","cock ring","chastity",
+  "penis pump","penile","erectile","extender penis",
 ];
 
 // Auto-generated from EXCLUDED_KEYWORDS — checks title for any brand mention
@@ -466,27 +391,6 @@ export async function POST(req: NextRequest) {
     const { keywords, limit = 50, autoSearch = false } = body;
 
     let totalAdded = 0;
-    let totalPublished = 0;
-
-    // Get user token for auto-publishing (getUserToken auto-refreshes if expired)
-    let userToken: string | null = null;
-    try {
-      userToken = await getUserToken();
-    } catch {
-      console.warn("[search] No user token — products will be saved but NOT published");
-    }
-
-    const autoPublish = async (productId: string) => {
-      if (!userToken) return;
-      try {
-        await publishProductById(productId, userToken);
-        totalPublished++;
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        console.error(`[search] ❌ Auto-publish failed for ${productId}: ${reason}`);
-        await markPublishFailed(productId, reason);
-      }
-    };
 
     // Single keyword search (frontend loops for auto-search)
     const kw = keywords || "";
@@ -511,15 +415,14 @@ export async function POST(req: NextRequest) {
       totalReviewed++;
       const productId = await processItem(item, kw);
       if (productId) {
-        totalAdded++;
-        await autoPublish(productId);
+        totalAdded++; // saved as "approved" — waits for manual review
       } else {
         totalSkipped++;
       }
       await new Promise((r) => setTimeout(r, 500));
     }
 
-    return NextResponse.json({ success: true, added: totalAdded, published: totalPublished, reviewed: totalReviewed, skipped: totalSkipped });
+    return NextResponse.json({ success: true, added: totalAdded, published: 0, reviewed: totalReviewed, skipped: totalSkipped });
 
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
