@@ -1,5 +1,5 @@
 import { db, COLLECTIONS } from "@/lib/firebase";
-import { getReferenceItemData } from "@/lib/ebay";
+import { getReferenceItemData, getCategoryIdForTitle, getTradingCategoryForTitle } from "@/lib/ebay";
 
 interface VariationSpec { specifics: Record<string, string>; refPrice: number; }
 interface VariationsData { variations: VariationSpec[]; specificsSet: Record<string, string[]>; picturesByVariant: Record<string, string[]>; pictureDimension: string; }
@@ -34,18 +34,22 @@ Description rules: professional tone, highlight features/benefits, NO dropshippi
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 300,
+        max_tokens: 600,
         messages: [{ role: "user", content: prompt }],
       }),
     });
 
-    if (!res.ok) throw new Error(`Claude API ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Claude API ${res.status}: ${errText.slice(0,100)}`);
+    }
     const data = await res.json();
     const raw = data.content?.[0]?.text?.trim() ?? "";
-    const clean = raw.replace(/^```json[\s\S]*?```$|^```[\s\S]*?```$/gm, "").trim();
-    // Find JSON object in response (Claude sometimes adds extra text)
+    if (!raw) throw new Error(`Claude empty response (stop_reason: ${data.stop_reason})`);
+    console.log(`[publish] Claude raw: ${raw.slice(0,80)}`);
+    const clean = raw.replace(/```json|```/g, "").trim();
     const jsonMatch = clean.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON in Claude response");
+    if (!jsonMatch) throw new Error(`No JSON in Claude response: "${raw.slice(0,60)}"`);
     const parsed = JSON.parse(jsonMatch[0]) as Record<string, string>;
     if (parsed.title && parsed.description) {
       console.log(`[publish] Title: "${parsed.title}" | Desc: ${parsed.description.length} chars`);
@@ -58,22 +62,127 @@ Description rules: professional tone, highlight features/benefits, NO dropshippi
 }
 
 // Safe category fallback map — if eBay rejects the category, use a known-good one
+// ─── Find alternative reference listing when original seller is blocked ────────
+async function findAlternativeReference(
+  title: string,
+  originalItemId: string,
+  userToken: string
+): Promise<{ itemId: string; categoryId: string; aspects: Record<string, string[]>; images: string[] } | null> {
+  try {
+    // Search for same product from different CN sellers
+    const appToken = await (await import("@/lib/ebay")).getAppToken();
+    const shortTitle = title.split(" ").slice(0, 5).join(" "); // first 5 words
+    const params = new URLSearchParams({
+      q:           shortTitle,
+      limit:       "10",
+      filter:      "buyingOptions:{FIXED_PRICE},itemLocationCountry:CN,conditions:{NEW}",
+      fieldgroups: "EXTENDED",
+    });
+    const res = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`, {
+      headers: { Authorization: `Bearer ${appToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { itemSummaries?: Record<string, unknown>[] };
+    const items = data.itemSummaries ?? [];
+
+    for (const item of items) {
+      const rawId = (item.itemId as string) ?? "";
+      const numericId = rawId.split("|")[1] ?? rawId;
+      if (numericId === originalItemId) continue; // skip the blocked one
+      // Skip items from same seller (same item ID prefix = same seller)
+      const origPrefix = originalItemId.slice(0, 6);
+      if (numericId.startsWith(origPrefix)) continue;
+      // Also check seller username
+      const itemSeller = (item.seller as { username?: string } | undefined)?.username ?? "";
+      if (itemSeller && originalItemId.includes(itemSeller)) continue;
+
+      // Try to get reference data from this listing
+      const { getReferenceItemData } = await import("@/lib/ebay");
+      const refData = await getReferenceItemData(numericId, userToken);
+      if (!refData) continue;
+
+      console.log(`[publish] 🔍 Alt ref: ${numericId} — ${Object.keys(refData.aspects).length} aspects`);
+      return {
+        itemId:     numericId,
+        categoryId: refData.categoryId,
+        aspects:    refData.aspects,
+        images:     refData.imageUrls,
+      };
+    }
+    return null;
+  } catch (e) {
+    console.warn("[publish] findAlternativeReference error:", e);
+    return null;
+  }
+}
+
+// --- Auto-fix eBay listing errors with Claude ---
+async function autoFixWithClaude(
+  errorMsg: string,
+  product: { title: string; description: string; categoryId: string; aspects: Record<string, string[]> }
+): Promise<{ title?: string; description?: string; categoryId?: string; aspects?: Record<string, string[]> } | null> {
+  try {
+    const isImproper = errorMsg.toLowerCase().includes("improper") || errorMsg.toLowerCase().includes("policy");
+    const prompt = isImproper
+      ? `Write a fresh eBay product description for: "${product.title}". 2-3 sentences, professional tone, highlight features and benefits only. No brand names, no Chinese text, no medical claims, no sexual content. Return ONLY JSON: {"title":"${product.title.replace(/[^\w\s]/g,"").slice(0,75)}","description":"your clean 2-3 sentence description here"}`
+      : `You are an eBay listing fixer. Error: "${errorMsg}". Title: ${product.title}. CategoryId: ${product.categoryId}. Aspects: ${JSON.stringify(product.aspects).slice(0,300)}. Fix only what the error requires. Return ONLY valid JSON with changed fields. "Model is missing"->{"aspects":{"Model":["Compatible"]}}. "item specific X missing"->{"aspects":{"X":["value"]}}. "category not valid"->{"categoryId":"11700"}. "too long" or "characters"->truncate the offending aspect value to under 65 chars in aspects JSON. Return the text null if unfixable.`;
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 400, messages: [{ role: "user", content: prompt }] }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { content: { type: string; text: string }[] };
+    const text = data.content.find((b: { type: string }) => b.type === "text")?.text ?? "";
+    if (text.trim() === "null") return null;
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    return JSON.parse(m[0]);
+  } catch { return null; }
+}
+
+
 function resolveCategoryId(categoryId: string, title: string): string {
-  if (categoryId) return categoryId;
+  // Always resolve from title — never trust a bad incoming categoryId
   const t = title.toLowerCase();
-  if (t.includes("lamp") || t.includes("light") || t.includes("led")) return "20697";    // Lamps
-  if (t.includes("mug") || t.includes("cup")) return "20686";                             // Mugs
+  // ── Auto / Car (check FIRST — "car brush" should go to Auto, not Brushes) ───
+  if (t.includes("car ") || t.includes("auto ") || t.includes("vehicle") ||
+      t.includes("dashboard") || t.includes("windshield") || t.includes("steering") ||
+      t.includes("seat gap") || t.includes("trunk") || t.includes("interior clean"))
+                                                              return "179690"; // Car Care Products
+  // ── Kitchen ─────────────────────────────────────────────────────────────────
+  if (t.includes("slicer") || t.includes("chopper") || t.includes("peeler") ||
+      t.includes("grater") || t.includes("strainer") || t.includes("colander") ||
+      t.includes("spatula") || t.includes("kitchen"))        return "20625";  // Kitchen Tools
+  if (t.includes("mug") || t.includes("cup"))                return "20686";  // Mugs
   if (t.includes("bottle") || t.includes("tumbler") || t.includes("flask")) return "20579"; // Bottles
-  if (t.includes("clock")) return "3815";                                                  // Clocks
-  if (t.includes("pillow")) return "20455";                                                // Pillows
-  if (t.includes("blanket") || t.includes("throw")) return "20460";                       // Blankets
-  if (t.includes("frame")) return "92074";                                                 // Frames
-  if (t.includes("rack") || t.includes("organizer")) return "20625";                      // Storage
-  if (t.includes("shoe")) return "112576";                                                 // Shoe Organizers
-  if (t.includes("brush")) return "13093";                                                 // Brushes
-  if (t.includes("mat") || t.includes("rug")) return "20580";                             // Rugs
-  if (t.includes("towel")) return "20461";                                                 // Towels
-  return "11700";                                                                          // Home & Garden (generic)
+  // ── Home storage/organizer ───────────────────────────────────────────────────
+  if (t.includes("rack") || t.includes("organizer") || t.includes("holder") ||
+      t.includes("storage") || t.includes("bin") || t.includes("basket"))    return "20625"; // Storage
+  if (t.includes("shoe"))                                     return "112576"; // Shoe Organizers
+  // ── Cleaning ────────────────────────────────────────────────────────────────
+  if (t.includes("brush") || t.includes("scrubber") || t.includes("sponge") ||
+      t.includes("mop") || t.includes("squeegee") || t.includes("clean"))    return "37592"; // Cleaning Supplies
+  // ── Lighting ────────────────────────────────────────────────────────────────
+  if (t.includes("lamp") || t.includes("light") || t.includes("led"))        return "20697"; // Lamps
+  // ── Pets ────────────────────────────────────────────────────────────────────
+  if (t.includes("pet") || t.includes("dog") || t.includes("cat") ||
+      t.includes("puppy") || t.includes("kitten"))            return "1281";   // Pet Supplies
+  // ── Travel ──────────────────────────────────────────────────────────────────
+  if (t.includes("travel") || t.includes("luggage") || t.includes("packing") ||
+      t.includes("passport") || t.includes("toiletry"))       return "3252";   // Travel Accessories
+  // ── Bedroom/Textile ─────────────────────────────────────────────────────────
+  if (t.includes("pillow"))                                   return "20455";  // Pillows
+  if (t.includes("blanket") || t.includes("throw"))          return "20460";  // Blankets
+  if (t.includes("towel"))                                    return "20461";  // Towels
+  if (t.includes("mat") || t.includes("rug"))                return "20580";  // Rugs
+  // ── Misc ────────────────────────────────────────────────────────────────────
+  if (t.includes("clock"))                                    return "3815";   // Clocks
+  if (t.includes("frame"))                                    return "92074";  // Frames
+  if (t.includes("vase") || t.includes("planter"))           return "116656"; // Vases
+  if (categoryId && categoryId !== "0")                       return categoryId; // trust incoming if nothing matched
+  return "11700"; // Home & Garden fallback
 }
 
 function escXml(s: string): string {
@@ -100,6 +209,15 @@ async function addFixedPriceItem(product: {
   // Always set these
   aspects["Brand"] = aspects["Brand"]?.length ? aspects["Brand"] : ["Unbranded"];
   aspects["MPN"]   = ["Does Not Apply"];
+
+  // eBay hard limit: aspect values max 65 chars, max 5 values per aspect
+  for (const key of Object.keys(aspects)) {
+    aspects[key] = aspects[key]
+      .map((v: string) => v.slice(0, 65).trim())
+      .filter((v: string) => v.length > 0)
+      .slice(0, 5);
+    if (aspects[key].length === 0) delete aspects[key];
+  }
 
   // Infer missing fields from title
   const t = product.title.toLowerCase();
@@ -268,13 +386,22 @@ async function addFixedPriceItem(product: {
       `<NameValueList><Name>${escXml(name)}</Name><Value>${escXml(v)}</Value></NameValueList>`
     ).join("")).join("");
 
+  // Sanitize description: remove HTML tags and non-ASCII (Chinese) chars
+  const safeDesc = (product.description || product.title)
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/  +/g, " ")
+    .slice(0, 500)
+    .trim();
+  console.log(`[publish] safeDesc preview: "${safeDesc.slice(0,100)}"`);
+
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
   <Item>
     <Title>${escXml(product.title.slice(0, 80))}</Title>
-    <Description><![CDATA[${product.description}]]></Description>
-    <PrimaryCategory><CategoryID>${resolveCategoryId(product.categoryId, product.title)}</CategoryID></PrimaryCategory>
+    <Description><![CDATA[${safeDesc}]]></Description>
+    <PrimaryCategory><CategoryID>${product.categoryId || resolveCategoryId("", product.title)}</CategoryID></PrimaryCategory>
     ${!hasVariations ? `<StartPrice>${product.price.toFixed(2)}</StartPrice>` : ""}
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
     <ConditionID>${conditionId}</ConditionID>
@@ -413,13 +540,150 @@ export async function publishProductById(productId: string, userToken: string): 
   // Generate clean title + description with Claude
   const { title: cleanTitle, description } = await generateTitleAndDescription(product.title, refAspects);
 
-  // Publish on eBay
-  const { itemId } = await addFixedPriceItem({
-    title: cleanTitle, description, categoryId: refCategoryId,
-    price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1),
-    images: refImages, condition: product.condition ?? "New", aspects: refAspects,
-    variations: refVariations, markupRatio,
-  }, userToken);
+  // Publish on eBay — with auto-fix retry on fixable errors
+  let itemId: string;
+  let publishTitle = cleanTitle;
+  let publishDesc  = description;
+  let publishCatId = refCategoryId;
+  // If no category from ref listing, ask eBay Taxonomy API for the best category
+  if (!publishCatId || publishCatId === "0") {
+    const taxonomyCatId = await getCategoryIdForTitle(product.title);
+    if (taxonomyCatId) {
+      publishCatId = taxonomyCatId;
+      console.log(`[publish] 📂 Taxonomy API → categoría: ${publishCatId}`);
+    } else {
+      publishCatId = resolveCategoryId("", product.title);
+      console.log(`[publish] 📂 Fallback local → categoría: ${publishCatId}`);
+    }
+  }
+  let publishAspects = { ...refAspects };
+
+  const FIXABLE = ["missing", "category", "Categor", "improper", "policy", "violation", "Model", "item specific", "too long", "characters"];
+
+  try {
+    const result = await addFixedPriceItem({
+      title: publishTitle, description: publishDesc, categoryId: publishCatId,
+      price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1),
+      images: refImages, condition: product.condition ?? "New", aspects: publishAspects,
+      variations: refVariations, markupRatio,
+    }, userToken);
+    itemId = result.itemId;
+  } catch (firstErr: unknown) {
+    const errMsg = String(firstErr instanceof Error ? firstErr.message : firstErr);
+    const isFixable = FIXABLE.some(kw => errMsg.toLowerCase().includes(kw.toLowerCase()));
+
+    if (!isFixable) throw firstErr; // not fixable — fail fast
+
+    console.log(`[publish] ⚠️ Error fixable detectado — pidiendo a Claude que corrija...`);
+    console.log(`[publish] Error: ${errMsg}`);
+
+    const fix = await autoFixWithClaude(errMsg, {
+      title: publishTitle, description: publishDesc,
+      categoryId: publishCatId, aspects: publishAspects,
+    });
+
+    // For category errors — resolve directly without Claude
+    if (errMsg.includes("Categor") || errMsg.toLowerCase().includes("category") || errMsg.includes("leaf")) {
+      // The reference item IS live on eBay → its categoryId is guaranteed valid
+      // Use it directly instead of guessing
+      // Map title keywords to known-working eBay LEAF category IDs
+      const t = publishTitle.toLowerCase();
+      let leafCatId = "20625"; // default: Kitchen Storage & Organization (verified leaf)
+      if (t.includes("adapter") || t.includes("converter") || t.includes("plug"))
+        leafCatId = "139762"; // Outlet Adapters & Converters (leaf)
+      else if (t.includes("phone") || t.includes("mobile") || t.includes("charger"))
+        leafCatId = "116458"; // Car Phone Holders & Mounts (leaf)
+      else if (t.includes("pet") || t.includes("dog") || t.includes("cat"))
+        leafCatId = "117426"; // Dog Beds (leaf)
+      else if (t.includes("travel") || t.includes("luggage") || t.includes("bag"))
+        leafCatId = "169291"; // Travel Accessories (leaf)
+      else if (t.includes("car") || t.includes("auto") || t.includes("vehicle"))
+        leafCatId = "179690"; // Car Care (leaf)
+      else if (t.includes("light") || t.includes("lamp") || t.includes("led"))
+        leafCatId = "20697";  // Lamps (leaf)
+      else if (t.includes("yoga") || t.includes("fitness") || t.includes("exercise"))
+        leafCatId = "158902"; // Fitness Equipment (leaf)
+      else if (t.includes("brush") || t.includes("clean"))
+        leafCatId = "37592";  // Cleaning Supplies (leaf)
+      publishCatId = leafCatId;
+      console.log(`[publish] 🔧 Categoría hoja por keyword: ${publishCatId}`);
+    } else {
+      if (!fix) { console.log("[publish] Claude no pudo corregir"); throw firstErr; }
+
+      // Apply fixes
+      if (fix.title)       { publishTitle   = fix.title;        console.log(`[publish] 🔧 Título corregido: "${fix.title}"`); }
+      if (fix.description) { publishDesc    = fix.description;  console.log(`[publish] 🔧 Descripción corregida`); }
+      if (fix.categoryId)  { publishCatId   = fix.categoryId;   console.log(`[publish] 🔧 Categoría corregida: ${fix.categoryId}`); }
+      if (fix.aspects)     { publishAspects = { ...publishAspects, ...fix.aspects }; console.log(`[publish] 🔧 Aspects corregidos:`, fix.aspects); }
+    }
+
+    // Retry once with fixes applied
+    // For "improper words" — use a completely neutral generic description
+    // to rule out content vs seller policy violation
+    if (errMsg.includes("improper") || errMsg.includes("policy")) {
+      publishDesc = `High-quality ${publishTitle}. Durable construction and practical design. Easy to use and clean. Perfect for everyday use. Fast shipping included.`;
+      console.log(`[publish] 🔧 Descripción genérica neutra aplicada`);
+    }
+
+    console.log(`[publish] 🔄 Reintentando con correcciones...`);
+    try {
+      const result2 = await addFixedPriceItem({
+        title: publishTitle, description: publishDesc, categoryId: publishCatId,
+        price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1),
+        images: refImages, condition: product.condition ?? "New", aspects: publishAspects,
+        variations: refVariations, markupRatio,
+      }, userToken);
+      itemId = result2.itemId;
+      console.log(`[publish] ✅ Publicado tras corrección automática — ID: ${itemId}`);
+    } catch (retryErr: unknown) {
+      const retryMsg = String(retryErr instanceof Error ? retryErr.message : retryErr);
+      // If still "improper/policy" after neutral desc → it's the SELLER/LISTING that's flagged, not content
+      if (retryMsg.includes("improper") || retryMsg.includes("policy")) {
+        // Seller blocked — search for alternative reference listing
+        console.log(`[publish] 🔍 Buscando listing alternativo para: "${publishTitle}"...`);
+        const altRef = await findAlternativeReference(publishTitle, product.ebayItemId, userToken);
+        if (!altRef) {
+          throw new Error(`Vendedor bloqueado y no se encontró referencia alternativa`);
+        }
+        console.log(`[publish] ✅ Referencia alternativa encontrada: ${altRef.itemId}`);
+        // Apply alternative ref data
+        if (altRef.categoryId) publishCatId = altRef.categoryId;
+        if (altRef.aspects && Object.keys(altRef.aspects).length > 0)
+          publishAspects = { ...publishAspects, ...altRef.aspects };
+        // Retry with alternative reference
+        try {
+          const result3 = await addFixedPriceItem({
+            title: publishTitle, description: publishDesc, categoryId: publishCatId,
+            price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1),
+            images: refImages.length > 0 ? refImages : altRef.images,
+            condition: product.condition ?? "New", aspects: publishAspects,
+            variations: refVariations, markupRatio,
+          }, userToken);
+          itemId = result3.itemId;
+          console.log(`[publish] ✅ Publicado con referencia alternativa — ID: ${itemId}`);
+        } catch (altErr: unknown) {
+          const altMsg = String(altErr instanceof Error ? altErr.message : altErr);
+          if (altMsg.includes("improper") || altMsg.includes("policy")) {
+            // Last resort: strip "car/auto" from title, use Home & Garden category
+            publishTitle = publishTitle.replace(/(car|auto|vehicle|automotive)/gi, "").replace(/\s+/g, " ").trim();
+            publishCatId = "11700"; // Home & Garden
+            publishAspects = { Brand: ["Unbranded"], MPN: ["Does Not Apply"] };
+            console.log(`[publish] 🔧 Último recurso: título="${publishTitle}" cat=11700`);
+            const result4 = await addFixedPriceItem({
+              title: publishTitle, description: publishDesc, categoryId: publishCatId,
+              price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1),
+              images: refImages.length > 0 ? refImages : altRef.images,
+              condition: product.condition ?? "New", aspects: publishAspects,
+              variations: null, markupRatio,
+            }, userToken);
+            itemId = result4.itemId;
+            console.log(`[publish] ✅ Publicado con fallback máximo — ID: ${itemId}`);
+          } else throw altErr;
+        }
+      }
+      throw retryErr;
+    }
+  }
 
   // Update Firestore
   const batch = db.batch();

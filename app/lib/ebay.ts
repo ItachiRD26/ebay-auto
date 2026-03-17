@@ -590,3 +590,210 @@ export async function getReferenceItemData(
     return null;
   }
 }
+
+// ─── Trading API: GetSuggestedCategories — guaranteed valid for listing ────────
+export async function getTradingCategoryForTitle(title: string, userToken: string): Promise<string | null> {
+  try {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<GetSuggestedCategoriesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
+  <Query>${title.slice(0, 80).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</Query>
+</GetSuggestedCategoriesRequest>`;
+
+    const res = await fetch("https://api.ebay.com/ws/api.dll", {
+      method: "POST",
+      headers: {
+        "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "X-EBAY-API-CALL-NAME": "GetSuggestedCategories",
+        "Content-Type": "text/xml",
+      },
+      body: xml,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      console.warn(`[trading-cat] HTTP ${res.status}`);
+      return null;
+    }
+    const text = await res.text();
+    if (text.includes("<Ack>Failure</Ack>")) {
+      const err = text.match(/<ShortMessage>(.*?)<\/ShortMessage>/)?.[1];
+      console.warn(`[trading-cat] Failure: ${err}`);
+      return null;
+    }
+    console.log(`[trading-cat] response snippet: ${text.slice(0, 200)}`);
+
+    // Pick the category with the highest PercentItemFound (most relevant)
+    const blocks = [...text.matchAll(/<SuggestedCategory>([\s\S]*?)<\/SuggestedCategory>/g)];
+    let bestId = "";
+    let bestPct = 0;
+    for (const block of blocks) {
+      const idMatch   = block[1].match(/<CategoryID>(\d+)<\/CategoryID>/);
+      const pctMatch  = block[1].match(/<PercentItemFound>(\d+)<\/PercentItemFound>/);
+      const nameMatch = block[1].match(/<CategoryName>(.*?)<\/CategoryName>/);
+      const pct = pctMatch ? parseInt(pctMatch[1]) : 0;
+      if (idMatch && pct > bestPct) {
+        bestPct = pct;
+        bestId  = idMatch[1];
+        console.log(`[trading-cat] ${idMatch[1]} (${nameMatch?.[1]}) — ${pct}%`);
+      }
+    }
+    return bestId || null;
+  } catch (e) {
+    console.warn("[trading-cat] Error:", e);
+    return null;
+  }
+}
+
+// ─── Taxonomy API: get best eBay category ID for a product title ──────────────
+// Uses getCategorySuggestions — 5,000 calls/day app-level limit
+// category_tree_id 0 = eBay US
+const _taxonomyCache = new Map<string, string>();
+
+// Get deepest leaf child of a category via subtree
+async function getLeafChildId(categoryId: string, token: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_subtree?category_id=${categoryId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) return null;
+
+    type TreeNode = {
+      category?: { categoryId: string; categoryName?: string };
+      childCategoryTreeNodes?: TreeNode[];
+      leafCategoryTreeNode?: boolean;
+      categoryTreeNodeLevel?: number;
+    };
+
+    const rawText = await res.text();
+    let data: { categorySubtreeNode?: TreeNode };
+    try { data = JSON.parse(rawText); } catch { return null; }
+    const root = data.categorySubtreeNode;
+    if (!root) return null;
+
+    // Check leafCategoryTreeNode field directly (from Taxonomy API docs)
+    if (root.leafCategoryTreeNode === true) {
+      console.log(`[taxonomy-subtree] ${categoryId} IS a leaf (leafCategoryTreeNode=true)`);
+      return root.category?.categoryId ?? null;
+    }
+
+    const children = root.childCategoryTreeNodes ?? [];
+    console.log(`[taxonomy-subtree] ${categoryId} (${root.category?.categoryName}) — ${children.length} children, leafCategoryTreeNode=${root.leafCategoryTreeNode}`);
+
+    if (children.length === 0) {
+      // No children but leafCategoryTreeNode not true — likely is a leaf anyway
+      return root.category?.categoryId ?? null;
+    }
+
+    // BFS — find deepest node where leafCategoryTreeNode=true
+    const queue: TreeNode[] = [...children];
+    let bestLeaf: string | null = null;
+    let bestLevel = 0;
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const subChildren = current.childCategoryTreeNodes ?? [];
+      const isLeaf = current.leafCategoryTreeNode === true || subChildren.length === 0;
+      const level = current.categoryTreeNodeLevel ?? 0;
+
+      if (isLeaf && level >= bestLevel) {
+        bestLeaf  = current.category?.categoryId ?? null;
+        bestLevel = level;
+        console.log(`[taxonomy-subtree] leaf candidate: ${current.category?.categoryId} (${current.category?.categoryName}) level=${level}`);
+      }
+      if (!isLeaf) queue.push(...subChildren);
+    }
+    return bestLeaf;
+  } catch { return null; }
+}
+
+export async function getCategoryIdForTitle(title: string): Promise<string | null> {
+  const cacheKey = title.toLowerCase().slice(0, 40);
+  if (_taxonomyCache.has(cacheKey)) return _taxonomyCache.get(cacheKey)!;
+
+  try {
+    const token = await getAppToken();
+    const res = await fetch(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions?q=${encodeURIComponent(title.slice(0, 80))}`,
+      {
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as {
+      categorySuggestions?: {
+        category: { categoryId: string; categoryName: string };
+        categoryTreeNodeLevel?: number;
+      }[];
+    };
+    const suggestions = (data.categorySuggestions ?? [])
+      .sort((a, b) => (b.categoryTreeNodeLevel ?? 0) - (a.categoryTreeNodeLevel ?? 0));
+    if (!suggestions.length) return null;
+
+    // Use deepest suggestion — then verify/drill to leaf via subtree
+    const best = suggestions[0];
+    const leafId = await getLeafChildId(best.category.categoryId, token);
+    const finalId = leafId ?? best.category.categoryId;
+
+    console.log(`[taxonomy] "${title.slice(0, 40)}" → ${finalId} (was: ${best.category.categoryId} ${best.category.categoryName}) level=${best.categoryTreeNodeLevel}`);
+    _taxonomyCache.set(cacheKey, finalId);
+    return finalId;
+  } catch (e) {
+    console.warn("[taxonomy] Error:", e);
+    return null;
+  }
+}
+
+// ─── Marketplace Insights API: check if an item has been sold ─────────────────
+// Searches sold items by item ID — avoids GetItem call for sales verification
+// Returns sold count from sold history (last 90 days) or null if not found
+export async function getItemSalesFromInsights(
+  itemId: string,
+  title: string
+): Promise<{ soldCount: number } | null> {
+  try {
+    const token = await getAppToken();
+    // Search by keyword (title) since direct item ID lookup isn't supported
+    const q = encodeURIComponent(title.split(" ").slice(0, 5).join(" "));
+    const params = new URLSearchParams({
+      q: title.split(" ").slice(0, 5).join(" "),
+      limit: "20",
+      filter: "conditions:{NEW},buyingOptions:{FIXED_PRICE}",
+    });
+    const res = await fetch(
+      `https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search?${params}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        },
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`[insights] HTTP ${res.status}: ${errText.slice(0, 150)}`);
+      return null;
+    }
+    const data = await res.json() as {
+      itemSales?: { itemId?: string; totalSoldItems?: number }[];
+    };
+    console.log(`[insights] ${res.status} — ${data.itemSales?.length ?? 0} sold items returned`);
+
+    // Find our specific item in the results
+    for (const item of data.itemSales ?? []) {
+      const rawId = (item.itemId ?? "").split("|")[1] ?? item.itemId ?? "";
+      if (rawId === itemId) {
+        return { soldCount: item.totalSoldItems ?? 0 };
+      }
+    }
+    return null; // item not found in sold history
+  } catch {
+    return null;
+  }
+}

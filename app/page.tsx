@@ -25,6 +25,10 @@ export default function Dashboard() {
   const [savedSellers, setSavedSellers] = useState<Array<{id:string,username:string,storeUrl:string,userUrl:string,totalListings:number,sampleTitles:string[],category:string}>>([]);
   const [sellersLoaded, setSellersLoaded] = useState(false);
   const [scanningCategory, setScanningCategory] = useState<string|null>(null);
+  type RLGroup = {apiName:string,apiContext:string,resources:{name:string,rates:{count:number,limit:number,remaining:number,reset:string,timeWindow:number}[]}[]};
+  const [rateLimits, setRateLimits] = useState<null|{user:RLGroup[],app:RLGroup[]}>(null);
+  const [showRateLimits, setShowRateLimits] = useState(false);
+  const [loadingRateLimits, setLoadingRateLimits] = useState(false);
   const [categories] = useState([
     "🍳 Cocina","🧹 Limpieza","🚿 Baño","🚗 Auto",
     "📱 Tech Accesorios","✈️ Viaje","🐾 Mascotas","🏠 Decoracion","Viral / Trendy"
@@ -244,6 +248,17 @@ export default function Dashboard() {
     setSavedSellers(s => s.filter(x => x.username !== username));
   };
 
+  const handleCheckRateLimits = async () => {
+    setLoadingRateLimits(true);
+    setShowRateLimits(true);
+    try {
+      const res = await fetch("/api/ebay/rate-limits");
+      const data = await res.json();
+      if (data.error) alert("Error: " + data.error);
+      else setRateLimits({ user: data.userLimits ?? [], app: data.appLimits ?? [] });
+    } finally { setLoadingRateLimits(false); }
+  };
+
   const handleDiscoverSellers = async () => { setActiveTab("sellers" as TabType); await loadSavedSellers(); };
 
   const handleImportStore = async (categoryOverride?: string) => {
@@ -380,6 +395,59 @@ export default function Dashboard() {
             </span>
           )}
         </div>
+
+        {/* ── Rate Limits ── */}
+        <div style={{ marginBottom:"1rem", display:"flex", alignItems:"center", gap:"0.75rem" }}>
+          <button onClick={handleCheckRateLimits} disabled={loadingRateLimits}
+            style={{ padding:"0.4rem 0.9rem", background:"#1e2235", color:"#94a3b8", border:"1px solid #2d3348", borderRadius:"7px", cursor:"pointer", fontSize:"0.8rem" }}>
+            {loadingRateLimits ? "⏳ Cargando..." : "📊 Ver límites de API"}
+          </button>
+        </div>
+
+        {/* ── Rate Limits Modal ── */}
+        {showRateLimits && (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}
+            onClick={() => setShowRateLimits(false)}>
+            <div style={{ background:"#0d0d14", border:"1px solid #1e2235", borderRadius:"12px", padding:"1.5rem", maxWidth:700, width:"90%", maxHeight:"80vh", overflowY:"auto" }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:"1rem" }}>
+                <strong style={{ color:"#e2e8f0", fontSize:"1rem" }}>📊 eBay API Rate Limits</strong>
+                <button onClick={() => setShowRateLimits(false)} style={{ background:"none", border:"none", color:"#94a3b8", cursor:"pointer", fontSize:"1.2rem" }}>✕</button>
+              </div>
+              {loadingRateLimits && <div style={{ color:"#94a3b8", textAlign:"center" }}>Cargando...</div>}
+              {rateLimits && <>
+                  {[{group: rateLimits.app, label: "⚠️ App-level (diario — GetItem etc.)", color: "#f59e0b"}, {group: rateLimits.user, label: "✅ User-level (por hora)", color: "#10b981"}].map(({group, label, color}, gi) => (
+                    <div key={`grp-${gi}`} style={{marginBottom:"1rem"}}>
+                      <div style={{fontSize:"0.75rem",fontWeight:700,color,marginBottom:"0.5rem"}}>{label}</div>
+                      {group.map((api, ai) => (
+                <div key={`${label}-${api.apiName}-${api.apiContext}-${ai}`} style={{ marginBottom:"1.25rem" }}>
+                  <div style={{ fontSize:"0.8rem", fontWeight:700, color:"#a855f7", marginBottom:"0.5rem" }}>
+                    {api.apiName} <span style={{ color:"#475569", fontWeight:400 }}>({api.apiContext})</span>
+                  </div>
+                  {api.resources.map((r, ri) => (r.rates ?? []).map((rate, rti) => (
+                    <div key={`${label}-${ai}-${ri}-${rti}`} style={{ display:"flex", alignItems:"center", gap:"0.75rem", padding:"0.4rem 0.6rem", marginBottom:"0.3rem", background:"#0a0a12", borderRadius:"6px", flexWrap:"wrap" }}>
+                      <span style={{ color:"#cbd5e1", fontSize:"0.78rem", minWidth:200 }}>{r.name}</span>
+                      {/* progress bar */}
+                      <div style={{ flex:1, minWidth:120, height:6, background:"#1e2235", borderRadius:3, overflow:"hidden" }}>
+                        <div style={{ height:"100%", borderRadius:3, width:`${Math.round((rate.remaining/rate.limit)*100)}%`,
+                          background: rate.remaining < rate.limit*0.1 ? "#ef4444" : rate.remaining < rate.limit*0.3 ? "#f59e0b" : "#10b981" }} />
+                      </div>
+                      <span style={{ fontSize:"0.75rem", color: rate.remaining < rate.limit*0.1?"#ef4444":rate.remaining < rate.limit*0.3?"#f59e0b":"#10b981", minWidth:80, textAlign:"right" }}>
+                        {rate.remaining.toLocaleString()} / {rate.limit.toLocaleString()}
+                      </span>
+                      <span style={{ fontSize:"0.7rem", color:"#475569" }}>
+                        reset {new Date(rate.reset).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  )))}
+                </div>
+              ))}
+                    </div>
+                  ))}
+                </>}
+            </div>
+          </div>
+        )}
 
 
 

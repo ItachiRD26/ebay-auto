@@ -45,8 +45,8 @@ export const SELLER_CATEGORIES: Record<string, string[]> = {
 };
 
 const MIN_LISTINGS       = 100;
-const MAX_LISTINGS       = 5000;
-const TOP_PER_CAT        = 5;
+const MAX_LISTINGS       = 500;
+const TOP_PER_CAT        = 10;
 const LIMIT_PER_REQ      = 100;
 const SELLERS_COLLECTION = "discovered_sellers";
 

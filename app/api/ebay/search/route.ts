@@ -17,44 +17,108 @@ const CONFIG = {
 
 // ─── Keyword list for auto-search ────────────────────────────────────────────
 const AUTO_KEYWORDS = [
-  // COCINA VIRAL / UTIL
-  "kitchen gadget","slicer","chopper","cutter","peeler","grater",
-  "strainer","colander","opener","dispenser","oil sprayer",
-  "food storage","lunch box","meal prep","silicone lid",
-  "air fryer accessory","sink organizer","drying rack",
-
-  // LIMPIEZA TOP VENTAS
-  "cleaning brush","electric scrubber","spin brush","dust remover",
-  "lint remover","pet hair remover","window cleaner","squeegee",
-  "microfiber","mop head","magic sponge","drain cleaner",
-
-  // BAÑO
-  "shower caddy","soap holder","toothbrush holder","towel rack",
-  "bath mat","non slip mat","toilet organizer","dispenser set",
-
-  // AUTO
-  "car organizer","seat gap filler","car hook","phone mount",
-  "car trash can","car storage","sunshade","steering cover",
-
-  // TECH ACCESORIOS GENERICOS
-  "phone stand","tablet stand","cable organizer","charging dock",
-  "desk organizer","laptop stand","mouse pad","led strip",
-
-  // VIAJE / UTILIDAD
-  "travel organizer","packing cube","compression bag",
-  "toiletry bag","passport holder","luggage tag",
-
-  // MASCOTAS (MUY BUEN NICHO)
-  "pet feeder","pet water bottle","dog toy","cat toy",
-  "pet grooming","fur remover","pet bed","pet bowl",
-
-  // DECORACION SIMPLE
-  "wall decor","floating shelf","plant hanger","planter",
-  "vase","led light","night light","ambient light",
-
-  // TRENDY / VIRAL PALABRAS MAGICAS
-  "multi function","adjustable","portable","reusable",
-  "self adhesive","automatic","smart","mini","compact"
+  "kitchen gadget",   "slicer",   "vegetable chopper",   "mandoline slicer",   "avocado slicer",   "egg slicer",
+  "strawberry slicer",   "apple corer",   "cherry pitter",   "mango splitter",   "pineapple corer",   "watermelon cutter",
+  "herb mincer",   "garlic press",   "garlic peeler",   "ginger grater",   "cheese grater",   "box grater",
+  "microplane grater",   "zester",   "potato peeler",   "vegetable peeler",   "y peeler",   "julienne peeler",
+  "spiralizer",   "vegetable spiralizer",   "pasta maker hand",   "ravioli mold",   "dumpling maker press",   "empanada press",
+  "tortilla press",   "cookie scoop",   "ice cream scoop",   "melon baller",   "colander strainer",   "salad spinner",
+  "pasta strainer",   "can opener",   "bottle opener",   "jar opener",   "wine opener",   "corkscrew",
+  "oil dispenser",   "oil sprayer",   "olive oil sprayer",   "salad dressing shaker",   "food storage container",   "glass food container",
+  "meal prep container",   "silicone food bag",   "reusable food wrap",   "beeswax wrap",   "silicone lid",   "stretch lid",
+  "bowl cover",   "food keeper",   "lunch box",   "bento box",   "salad container",   "snack box",
+  "stackable container",   "air fryer rack",   "air fryer accessories",   "air fryer liner",   "baking mat",   "silicone baking mat",
+  "pastry mat",   "rolling pin",   "dough scraper",   "bench scraper",   "cake turntable",   "icing spatula",
+  "piping bag set",   "cake decorating set",   "cookie cutter set",   "cupcake mold",   "silicone mold",   "ice cube tray",
+  "ice ball maker",   "popsicle mold",   "chocolate mold",   "bundt pan",   "springform pan",   "sink caddy",
+  "sink organizer",   "dish drying rack",   "over sink rack",   "kitchen shelf",   "spice rack",   "spice organizer",
+  "cabinet organizer kitchen",   "drawer organizer kitchen",   "utensil holder",   "cutlery organizer",   "pot lid organizer",   "pan organizer",
+  "cutting board set",   "bamboo cutting board",   "flexible cutting mat",   "kitchen scale",   "measuring spoon set",   "measuring cup set",
+  "kitchen timer",   "cooking thermometer",   "meat thermometer",   "instant read thermometer",   "whisk set",   "silicone whisk",
+  "spatula set",   "silicone spatula",   "wooden spoon set",   "ladle set",   "tongs set",   "kitchen scissors",
+  "herb scissors",   "pizza cutter",   "cheese knife",   "butter spreader",   "grease separator",   "turkey baster",
+  "marinade injector",   "pot holder set",   "oven mitt set",   "silicone glove kitchen",   "kitchen apron",   "waterproof apron",
+  "dish soap dispenser",   "soap pump kitchen",   "fruit basket",   "bread basket",   "fruit bowl",   "banana hanger",
+  "napkin holder",   "paper towel holder",   "wine rack",   "wine bottle holder",   "wine glass holder",   "stemware rack",
+  "mandoline finger guard",   "cut resistant glove",   "herb storage keeper",   "produce saver container",   "salad keeper",   "lettuce saver",
+  "berry container",   "onion keeper",   "avocado saver",   "egg storage rack",   "deviled egg tray",   "butter dish",
+  "honey dispenser",   "syrup dispenser",   "spoon rest",   "pot trivet silicone",   "steam rack insert",   "instant pot rack",
+  "bamboo wok spatula",   "mortar and pestle",   "tea infuser",   "loose leaf strainer",   "handheld milk frother",   "matcha whisk",
+  "lemon squeezer",   "cocktail mixing set",   "ice cube mold",   "bread scoring lame",   "proofing basket",   "mason jar fermentation lid",
+  "sushi making kit",   "takoyaki pan",   "egg ring mold",   "donut baking pan",   "cake smoothing tool",   "silicone pastry brush",
+  "basting brush",   "cleaning brush set",   "toilet brush set",   "bathroom brush",   "grout cleaning brush",   "tile scrub brush",
+  "bottle brush baby",   "straw cleaning brush",   "detail brush kit",   "electric scrubber",   "power scrubber",   "cordless tile scrubber",
+  "drill brush attachment",   "spin scrubber",   "floor scrubber",   "window squeegee",   "shower squeegee",   "rubber squeegee",
+  "extendable squeegee",   "microfiber cloth set",   "cleaning cloth",   "glass cleaning cloth",   "mop head replacement",   "flat mop",
+  "spin mop",   "steam mop pad",   "broom dustpan set",   "mini dustpan",   "handheld dustpan",   "dust mop pad",
+  "lint roller refill",   "lint remover brush",   "pet hair remover brush",   "fabric shaver",   "lint brush clothes",   "fur remover roller",
+  "reusable lint roller",   "small trash can",   "bathroom trash bin",   "compost bin countertop",   "drain hair catcher",   "shower drain strainer",
+  "sink strainer",   "sponge holder sink",   "dish brush holder",   "magic eraser sponge",   "melamine sponge set",   "scrub sponge set",
+  "extendable duster",   "ceiling fan duster",   "cobweb duster",   "blind duster cleaner",   "laundry mesh bag",   "clothes drying rack",
+  "collapsible drying rack",   "ironing board cover",   "shower caddy tension",   "corner shower shelf",   "over door bathroom organizer",   "over toilet storage",
+  "bathroom floating shelf",   "soap dish holder",   "wall soap holder",   "foaming soap dispenser",   "automatic soap dispenser",   "toothbrush wall holder",
+  "electric toothbrush holder",   "towel ring",   "towel bar",   "adhesive towel hook",   "bath towel rack",   "hand towel ring",
+  "memory foam bath mat",   "diatomite bath mat",   "non slip shower mat",   "bathtub suction mat",   "toilet paper stand",   "toilet roll holder",
+  "bathroom trash can",   "makeup organizer bathroom",   "cosmetic storage organizer",   "vanity organizer tray",   "under sink organizer",   "bathroom drawer organizer",
+  "shower curtain hooks",   "rustproof shower rings",   "shower head bracket",   "adjustable shower holder",   "razor wall holder",   "hair dryer wall holder",
+  "hair tool organizer wall",   "flat iron holder wall",   "bath pillow suction",   "bathtub tray bamboo",   "scalp shampoo brush",   "shower scalp massager",
+  "back seat car organizer",   "car trunk organizer",   "car storage box",   "center console organizer",   "car cup holder insert",   "seat gap filler",
+  "dashboard phone mount",   "windshield phone mount",   "air vent phone holder",   "cd slot phone holder",   "car headrest hook",   "car seat hanger",
+  "car trash can mini",   "car garbage bin",   "car windshield sunshade",   "baby car window shade",   "steering wheel cover",   "car gear shift cover",
+  "car door handle guard",   "car key organizer",   "car tissue holder",   "sun visor organizer",   "car interior brush",   "dashboard cleaning brush",
+  "car ambient led light",   "dual car usb charger",   "car vent freshener",   "car armrest organizer",   "cargo net car",   "car laptop desk",
+  "adjustable phone stand",   "foldable phone stand",   "lazy phone holder",   "gooseneck phone holder",   "tablet desk stand",   "foldable laptop stand",
+  "portable laptop stand",   "laptop cooling pad",   "laptop ergonomic stand",   "monitor desk stand",   "screen riser",   "keyboard wrist rest",
+  "extended mouse pad",   "desk mat xl",   "cable management clips",   "cord organizer sleeve",   "charging station dock",   "wireless charging pad",
+  "fast wireless charger",   "headphone stand desk",   "headset holder",   "under desk hook",   "screen cleaner kit",   "silicone keyboard cover",
+  "led usb desk lamp",   "clip on reading light",   "webcam privacy cover",   "clip on phone lens",   "mini ring light phone",   "pop socket grip",
+  "desk organizer set",   "pen cup holder",   "document tray organizer",   "packing cube set",   "compression packing cube",   "hanging toiletry bag",
+  "tsa toiletry bag",   "refillable travel bottles",   "rfid passport holder",   "rfid travel wallet",   "money belt travel",   "luggage strap",
+  "memory foam neck pillow",   "inflatable travel pillow",   "sleep eye mask",   "noise canceling ear plug",   "compact travel umbrella",   "travel shoe bag",
+  "travel laundry bag",   "universal travel adapter",   "digital luggage scale",   "tsa combination lock",   "vacuum travel bag",   "travel clothesline",
+  "quick dry travel towel",   "slim card holder wallet",   "automatic pet feeder",   "slow feeder bowl",   "elevated pet feeder",   "portable dog water bottle",
+  "pet travel bottle",   "collapsible pet bowl",   "cat water fountain",   "dog drinking fountain",   "pet food container",   "stainless pet bowl",
+  "non slip dog bowl",   "waterproof pet mat",   "squeaky dog toy",   "rope chew toy",   "interactive treat toy dog",   "cat feather wand",
+  "cat crinkle toy",   "catnip toy set",   "cat tunnel toy",   "slicker brush dog",   "deshedding pet brush",   "cat grooming glove",
+  "dog nail clippers",   "pet grooming kit",   "pet toothbrush set",   "reflective dog collar",   "breakaway cat collar",   "retractable dog leash",
+  "no pull dog harness",   "step in harness",   "soft pet carrier",   "backpack cat carrier",   "dog waste bag holder",   "paw cleaner cup",
+  "muddy paw washer",   "cat litter mat",   "dog training treat pouch",   "obedience clicker",   "floating wall shelf",   "corner shelf",
+  "display ledge shelf",   "bamboo wall shelf",   "wall hook set",   "decorative coat hooks",   "key holder wall",   "metal wall art",
+  "wooden wall sign",   "macrame wall hanging",   "boho tapestry wall",   "silent wall clock",   "frameless clock",   "multi photo frame",
+  "collage picture frame",   "touch bedside lamp",   "usb bedside lamp",   "plug in night light",   "sensor night light",   "flameless led candle",
+  "remote candle set",   "outdoor fairy lights",   "bedroom string lights",   "globe string lights",   "glass bud vase",   "ceramic nordic vase",
+  "wall plant hanger",   "macrame plant holder",   "geometric planter",   "terracotta pot set",   "tiered plant stand",   "corner plant stand",
+  "geometric candle holder",   "pillar candle stand",   "throw pillow cover",   "cushion cover set",   "woven area rug",   "reed diffuser set",
+  "essential oil diffuser",   "cabinet knob set",   "drawer pull handles",   "curtain ring clips",   "decorative bookend",   "vanity tray",
+  "round wall mirror",   "decorative mirror",   "tabletop mirror",   "fabric resistance band",   "loop resistance band",   "pull up band",
+  "non slip yoga mat",   "travel yoga mat",   "cork yoga block",   "yoga strap buckle",   "foam roller muscle",   "massage spike ball",
+  "speed jump rope",   "weighted jump rope",   "ab wheel roller",   "core slider disc",   "push up board",   "push up handle",
+  "ankle weight set",   "wrist weight set",   "hand grip strengthener",   "balance wobble board",   "doorway pull up bar",   "sports shaker bottle",
+  "sports headband",   "sweat wristband",   "knee compression sleeve",   "elbow support brace",   "ice gel pack reusable",   "posture corrector brace",
+  "acupressure spike mat",   "silicone watch sport band",   "workout lifting gloves",   "jade face roller",   "rose quartz roller",   "gua sha tool",
+  "eyelash curler",   "eyebrow razor",   "glass nail file set",   "nail buffer block",   "cuticle trimmer",   "nail art brush kit",
+  "nail dotting tool",   "makeup brush set",   "kabuki brush",   "beauty blender sponge",   "brush cleaner mat",   "makeup brush rack",
+  "brush holder organizer",   "cosmetic travel bag",   "led vanity mirror",   "magnifying makeup mirror",   "hair claw clip set",   "butterfly clip set",
+  "hair pin organizer",   "silk scrunchie set",   "wide tooth comb",   "wet detangling brush",   "head scalp massager",   "shampoo scalp brush",
+  "dry body brush",   "exfoliating bath glove",   "loofah pad set",   "pumice stone foot",   "nose hair trimmer",   "reusable cotton rounds",
+  "bamboo drawer divider",   "expandable drawer organizer",   "closet shelf divider",   "velvet slim hanger set",   "clear shoe box stackable",   "over door shoe organizer",
+  "under bed storage",   "vacuum space saver bag",   "fabric storage bin",   "fridge storage bin",   "refrigerator organizer",   "can rack pantry organizer",
+  "pantry storage container",   "lazy susan organizer",   "stackable cabinet shelf",   "cord management box",   "jewelry tray organizer",   "watch stand organizer",
+  "sunglasses holder display",   "silicone baby bib",   "waterproof bib set",   "baby suction bowl",   "silicone suction plate",   "silicone baby spoon",
+  "teether cooling toy",   "baby nail trimmer",   "baby nail care kit",   "soft baby brush",   "bathtub baby mat",   "bath toy organizer",
+  "diaper clutch",   "portable changing pad",   "reusable wet dry bag",   "cabinet baby lock",   "corner guard baby",   "outlet plug cover",
+  "baby night light",   "car seat strap cover",   "stroller organizer",   "activity play mat",   "growth chart wall",   "garden kneeler pad",
+  "hand trowel set",   "pruning shears",   "garden marker stake",   "seed tray starter",   "indoor watering can",   "adjustable hose nozzle",
+  "plant misting bottle",   "soil moisture meter",   "velcro plant tie",   "climbing trellis net",   "waterproof garden gloves",   "window bird feeder",
+  "solar path light",   "garden wind spinner",   "fabric grow bag",   "drip irrigation kit",   "garden utility apron",   "sticky insect trap",
+  "large pencil case",   "desk organizer caddy",   "sticky note set",   "binder clip assorted",   "pastel highlighter set",   "planner sticker set",
+  "washi tape assorted",   "spiral notebook cover",   "index tab set",   "magnetic bookmark",   "laptop neoprene sleeve",   "tech cable organizer",
+  "backpack insert organizer",   "lanyard badge holder",   "whiteboard eraser",   "office chair cushion",   "adjustable footrest desk",   "monitor bar light",
+  "mini succulent pot",   "usb rechargeable hand warmer",   "bathtub bamboo tray",   "bath bomb mold",   "body scrub storage jar",   "himalayan salt lamp",
+  "lavender eye pillow",   "meditation floor cushion",   "foot soak basin",   "massage stone set",   "facial cupping set",   "microfiber hair turban",
+  "wide spa headband",   "candle wick trimmer",   "aromatherapy lava bracelet",   "pillow mist spray",   "watercolor brush set",   "palette knife set",
+  "self healing cutting mat",   "craft heat gun",   "embroidery floss organizer",   "knitting needle case",   "embroidery hoop set",   "reusable craft stencil",
+  "mini glue gun" 
 ];
 
 const EXCLUDED_KEYWORDS: string[] = [
@@ -295,7 +359,15 @@ async function processItem(
     return false;
   }
 
-  // ── 3. Trading API: sales data + country confirmation ──────────────────────
+  // ── 3. Quick pre-checks before expensive Trading API call ─────────────────
+  // Skip if condition is clearly not new
+  const conditionId = (item.conditionId as string) ?? "";
+  if (conditionId && !["1000","1500"].includes(conditionId)) {
+    console.log(`   SKIP [condicion] "${title.slice(0,50)}" — ${conditionId}`);
+    return false;
+  }
+
+  // ── 4. Trading API: sales data + country confirmation ──────────────────────
   const td = await getItemDataViaTradingAPI(numericId);
 
   // Confirm China origin via Trading API
@@ -304,7 +376,7 @@ async function processItem(
     return false;
   }
 
-  // ── 4. Sales filters ────────────────────────────────────────────────────────
+  // ── 5. Sales filters ────────────────────────────────────────────────────────
   const ageLabel = td.listingAgeDays < 90 ? "nuevo" :
                    td.listingAgeDays < 365 ? `${Math.round(td.listingAgeDays/30)}m` :
                    `${(td.listingAgeDays/365).toFixed(1)}a`;
@@ -323,7 +395,7 @@ async function processItem(
     return false;
   }
 
-  // ── 5. Duplicate check ──────────────────────────────────────────────────────
+  // ── 6. Duplicate check ──────────────────────────────────────────────────────
   const dup = await db.collection(COLLECTIONS.QUEUE).where("ebayItemId", "==", numericId).limit(1).get();
   if (!dup.empty) {
     console.log(`      ⚠️  DUPLICADO (itemId)`);
@@ -339,7 +411,7 @@ async function processItem(
     return false;
   }
 
-  // ── 6. Build and save queue product ─────────────────────────────────────────
+  // ── 7. Build and save queue product ─────────────────────────────────────────
   console.log(`      ✅ ACEPTADO | mercado $${pricing.totalMarketCost} | listamos $${pricing.suggestedSellingPrice} | ~${td.estimatedSold30d}/30d`);
 
   const images =
@@ -399,7 +471,7 @@ export async function POST(req: NextRequest) {
     console.log(`\n🔍 Búsqueda: "${kw}"`);
     let result: { itemSummaries?: unknown[] };
     try {
-      result = await searchProducts(kw, 20);
+      result = await searchProducts(kw, 50);
     } catch (searchErr) {
       const msg = searchErr instanceof Error ? searchErr.message : String(searchErr);
       console.warn(`[search] ⚠️ Failed "${kw}":`, msg);
@@ -419,7 +491,7 @@ export async function POST(req: NextRequest) {
       } else {
         totalSkipped++;
       }
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 200));
     }
 
     return NextResponse.json({ success: true, added: totalAdded, published: 0, reviewed: totalReviewed, skipped: totalSkipped });

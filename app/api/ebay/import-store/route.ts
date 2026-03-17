@@ -6,8 +6,9 @@ import { SELLER_CATEGORIES } from "@/api/ebay/discover-sellers/route";
 
 // Flat fallback keywords if no category known
 const DEFAULT_SCAN_KEYWORDS = [
-  "organizer","holder","storage","rack","stand","hook","hanger","mat","pad",
-  "brush","cleaner","dispenser","case","cover","bag","pouch","set","box",
+ "travel organizer","packing cube","compression bag",
+  "toiletry bag","passport holder","luggage tag",
+
 ];
 
 // ─── Same filters as search route ────────────────────────────────────────────
@@ -18,7 +19,7 @@ const CONFIG = {
   MIN_SOLD_30D:   3,    // min estimated sales last 30 days
   MARKUP_PERCENT: 6,
   STOCK:          1,
-  MAX_VARIATIONS: 12,   // skip listings with too many variants
+  MAX_VARIATIONS: 20,   // skip listings with too many variants
 };
 
 // Cache user token for Trading API calls
