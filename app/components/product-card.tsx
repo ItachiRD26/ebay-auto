@@ -13,6 +13,8 @@ interface Props {
 
 export default function ProductCard({ product, onApprove, onReject, onPublish, onUpdate }: Props) {
   const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(product.title ?? "");
+  const [editCategoryId, setEditCategoryId] = useState(product.categoryId ?? "");
   const [price, setPrice] = useState((product.suggestedSellingPrice ?? 0).toString());
   const [eproloPrice, setEproloPrice] = useState(product.eproloPrice?.toString() ?? "");
   const [description, setDescription] = useState(product.description ?? "");
@@ -28,6 +30,8 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   const marginColor = marginPct === null ? "#64748b" : parseFloat(marginPct) >= 30 ? "#10b981" : parseFloat(marginPct) >= 15 ? "#f59e0b" : "#ef4444";
 
   const handleSave = () => {
+    if (editTitle && editTitle !== product.title) onUpdate({ title: editTitle });
+    if (editCategoryId && editCategoryId !== product.categoryId) onUpdate({ categoryId: editCategoryId });
     onUpdate({ suggestedSellingPrice: sellingPrice, eproloPrice: costPrice || null, description, stock: parseInt(stock) || 10, margin, marginPercent: marginPct ? parseFloat(marginPct) : null });
     setEditing(false);
   };
@@ -177,11 +181,100 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             </div>
           )}
           {product.status === "failed" && (
-            <div>
+            <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem" }}>
               <p className="fail-reason">⚠️ {product.failReason ?? "Error desconocido"}</p>
-              <button className="btn btn-publish" style={{marginTop:"0.5rem"}} onClick={handlePublish} disabled={publishing}>
-                {publishing ? "Reintentando..." : "🔄 Reintentar"}
+              <button className="btn btn-edit" onClick={() => setEditing(!editing)}>
+                {editing ? "✕ Cerrar editor" : "✏ Editar y reintentar"}
               </button>
+              {editing && (
+                <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem", padding:"0.75rem", background:"#080810", borderRadius:"8px", border:"1px solid #1e2235" }}>
+                  <label className="field-label">Título (max 80 chars)</label>
+                  <input
+                    className="stock-input"
+                    style={{ width:"100%", fontSize:"0.8rem" }}
+                    value={editTitle}
+                    onChange={e => setEditTitle(e.target.value.slice(0, 80))}
+                    placeholder="Título del listing..."
+                  />
+                  <div style={{ fontSize:"0.7rem", color: editTitle.length > 75 ? "#ef4444" : "#475569", textAlign:"right" }}>
+                    {editTitle.length}/80
+                  </div>
+                  <label className="field-label">Categoría</label>
+                  <select
+                    className="stock-input"
+                    style={{ width:"100%", fontSize:"0.78rem" }}
+                    value={editCategoryId}
+                    onChange={e => setEditCategoryId(e.target.value)}
+                  >
+                    <option value="">-- Seleccionar categoría --</option>
+                    <optgroup label="🏠 Home &amp; Garden">
+                      <option value="20625">Kitchen, Dining &amp; Bar Storage</option>
+                      <option value="20686">Mugs &amp; Cups</option>
+                      <option value="20579">Water Bottles &amp; Hydration</option>
+                      <option value="20697">Lamps</option>
+                      <option value="20455">Throw Pillows</option>
+                      <option value="20460">Blankets &amp; Throws</option>
+                      <option value="20461">Bath Towels</option>
+                      <option value="20580">Area Rugs &amp; Mats</option>
+                      <option value="3815">Decorative Clocks</option>
+                      <option value="92074">Picture Frames</option>
+                      <option value="116656">Vases</option>
+                      <option value="37592">Household Cleaning Supplies</option>
+                      <option value="112576">Shoe Organizers &amp; Racks</option>
+                      <option value="11700">Home &amp; Garden (general)</option>
+                    </optgroup>
+                    <optgroup label="🐾 Pet Supplies">
+                      <option value="117426">Dog Beds</option>
+                      <option value="116381">Dog Collars &amp; Tags</option>
+                      <option value="66783">Dog Toys</option>
+                      <option value="20748">Cat Supplies</option>
+                      <option value="1281">Pet Supplies (general)</option>
+                    </optgroup>
+                    <optgroup label="🚗 Auto">
+                      <option value="179690">Car Care</option>
+                      <option value="14927">Car Interior Accessories</option>
+                      <option value="116458">Car Phone Holders &amp; Mounts</option>
+                    </optgroup>
+                    <optgroup label="📱 Tech Accessories">
+                      <option value="175759">Cell Phone Accessories</option>
+                      <option value="58058">Laptop &amp; Desktop Accessories</option>
+                      <option value="139762">Outlet Adapters &amp; Converters</option>
+                    </optgroup>
+                    <optgroup label="💪 Fitness">
+                      <option value="158902">Fitness Equipment</option>
+                      <option value="111844">Yoga &amp; Pilates</option>
+                    </optgroup>
+                    <optgroup label="✈️ Travel">
+                      <option value="169291">Travel Accessories</option>
+                      <option value="45229">Luggage</option>
+                    </optgroup>
+                    <optgroup label="👶 Baby">
+                      <option value="20394">Baby Feeding Supplies</option>
+                      <option value="162231">Baby Safety</option>
+                    </optgroup>
+                    <optgroup label="🌿 Health &amp; Beauty">
+                      <option value="26395">Nail Care Tools</option>
+                      <option value="45255">Makeup Brushes &amp; Tools</option>
+                      <option value="11854">Health Care</option>
+                    </optgroup>
+                  </select>
+                  <label className="field-label">Descripción</label>
+                  <textarea className="desc-input" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="Descripción del producto..." />
+                  <label className="field-label">Tu precio ($)</label>
+                  <input className="stock-input" type="number" step="0.01" value={price} onChange={e => setPrice(e.target.value)} />
+                  <div style={{ display:"flex", gap:"0.5rem", marginTop:"0.25rem" }}>
+                    <button className="btn btn-save" onClick={handleSave} style={{ flex:1 }}>💾 Guardar cambios</button>
+                    <button className="btn btn-publish" onClick={() => { handleSave(); handlePublish(); }} disabled={publishing} style={{ flex:1 }}>
+                      {publishing ? "Publicando..." : "🚀 Publicar ahora"}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {!editing && (
+                <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
+                  {publishing ? "Reintentando..." : "🔄 Reintentar sin editar"}
+                </button>
+              )}
             </div>
           )}
         </div>

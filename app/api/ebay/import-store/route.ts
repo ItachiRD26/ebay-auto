@@ -19,7 +19,7 @@ const CONFIG = {
   MIN_SOLD_30D:   3,    // min estimated sales last 30 days
   MARKUP_PERCENT: 6,
   STOCK:          1,
-  MAX_VARIATIONS: 20,   // skip listings with too many variants
+  MAX_VARIATIONS: 30,   // skip listings with too many variants
 };
 
 // Cache user token for Trading API calls

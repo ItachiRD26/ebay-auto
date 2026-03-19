@@ -103,17 +103,17 @@ export async function getUserToken(): Promise<string> {
 
 // ─── Browse API: Keyword Search ───────────────────────────────────────────────
 
-export async function searchProducts(keywords: string, limit = 50) {
+export async function searchProducts(keywords: string, limit = 200) {
   const token = await getAppToken();
 
+  // Browse API max is 200 per request
+  // sort=PRICE_DESC puts higher-priced (more profitable) items first
+  // We can't sort by soldQuantity in Browse API, but bestMatch favors popular items
   const params = new URLSearchParams({
     q: keywords,
-    limit: limit.toString(),
+    limit: Math.min(limit, 200).toString(),
     sort: "bestMatch",
-    // buyingOptions: only Buy It Now
-    // itemLocationCountry:CN — only show items located/shipped FROM China
-    // These are the reference listings we use for dropshipping pricing
-    filter: "buyingOptions:{FIXED_PRICE},itemLocationCountry:CN",
+    filter: "buyingOptions:{FIXED_PRICE},itemLocationCountry:CN,conditions:{NEW}",
     fieldgroups: "EXTENDED",
   });
 

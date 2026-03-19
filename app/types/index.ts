@@ -46,6 +46,7 @@ export interface QueueProduct {
 
   createdAt: number;
   updatedAt: number;
+  expiresAt?: Date;  // TTL: auto-delete after 24h (eBay Content policy)
 }
 
 export interface Settings {
