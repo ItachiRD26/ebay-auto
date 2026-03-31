@@ -1,42 +1,71 @@
 "use client";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
 
-export default function ConnectPage() {
-  const [url, setUrl] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const router = useRouter();
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
+import { Store } from "@/types";
+
+function ConnectPageInner() {
+  const { user }    = useAuth();
+  const router      = useRouter();
+  const params      = useSearchParams();
+
+  const [stores, setStores]         = useState<Store[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [url, setUrl]               = useState("");
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState("");
+
+  useEffect(() => {
+    if (!user) return;
+    fetch(`/api/ebay/stores?userId=${user.uid}`)
+      .then(r => r.json())
+      .then(d => {
+        if (!d.stores) return;
+        setStores(d.stores);
+        const paramId = params.get("storeId");
+        if (paramId && d.stores.find((s: Store) => s.id === paramId)) {
+          setSelectedId(paramId);
+        } else {
+          const disc = d.stores.find((s: Store) => !s.connected);
+          setSelectedId(disc ? disc.id : d.stores[0]?.id ?? "");
+        }
+      });
+  }, [user, params]);
 
   const handleGoToEbay = async () => {
-    const res = await fetch("/api/ebay/oauth", { method: "POST" });
+    if (!selectedId) { setError("Selecciona una tienda primero"); return; }
+    const res  = await fetch("/api/ebay/oauth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storeId: selectedId }),
+    });
     const data = await res.json();
     if (data.url) window.open(data.url, "_blank");
+    else setError("No se pudo generar URL de autorización");
   };
 
   const handleConnect = async () => {
+    setError("");
+    setLoading(true);
     try {
-      setLoading(true);
-      setError("");
-
-      const parsed = new URL(url);
-      const code = parsed.searchParams.get("code");
-
-      if (!code) {
-        setError("No se encontró el código en la URL. Asegúrate de pegar la URL completa.");
-        return;
+      if (!selectedId) { setError("Selecciona una tienda primero"); return; }
+      let code = "";
+      try {
+        code = new URL(url).searchParams.get("code") ?? "";
+      } catch {
+        setError("URL inválida. Pega la URL completa de redirección de eBay."); return;
       }
+      if (!code) { setError("No se encontró el código en la URL. Pega la URL completa."); return; }
 
-      const res = await fetch("/api/ebay/oauth/manual", {
+      const res  = await fetch("/api/ebay/oauth/manual", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, storeId: selectedId, userId: user?.uid ?? "" }),
       });
-
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al conectar");
-
-      router.push("/settings?success=connected");
+      if (!res.ok) throw new Error(data.error ?? "Error al conectar");
+      router.push("/?connected=1");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error desconocido");
     } finally {
@@ -44,49 +73,98 @@ export default function ConnectPage() {
     }
   };
 
-  return (
-    <div style={{ minHeight: "100vh", background: "#0a0a0f", color: "#e2e8f0", fontFamily: "sans-serif", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ width: "100%", maxWidth: 560, padding: "2rem", background: "#0d0d14", border: "1px solid #1e2235", borderRadius: 16 }}>
-        <h1 style={{ fontSize: "1.2rem", fontWeight: 700, marginBottom: "0.5rem" }}>🔗 Conectar cuenta eBay</h1>
-        <p style={{ fontSize: "0.85rem", color: "#64748b", marginBottom: "1.5rem" }}>
-          Después de autorizar en eBay, copia la URL completa de la página a la que te redirigió y pégala aquí.
-        </p>
+  const selectedStore = stores.find(s => s.id === selectedId);
 
-        <div style={{ background: "#111120", border: "1px solid #1e2235", borderRadius: 10, padding: "1rem", marginBottom: "1.25rem", fontSize: "0.8rem", color: "#64748b" }}>
-          <p style={{ margin: "0 0 0.5rem 0", color: "#94a3b8", fontWeight: 600 }}>📋 Pasos:</p>
-          <p style={{ margin: "0.2rem 0" }}>1. Click en &quot;Ir a eBay&quot; abajo</p>
-          <p style={{ margin: "0.2rem 0" }}>2. Inicia sesión con tu cuenta de vendedor</p>
-          <p style={{ margin: "0.2rem 0" }}>3. Autoriza la app</p>
-          <p style={{ margin: "0.2rem 0" }}>4. eBay te redirige a una página — copia la URL completa</p>
-          <p style={{ margin: "0.2rem 0" }}>5. Pégala aquí y click &quot;Conectar&quot;</p>
+  return (
+    <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1.5rem" }}>
+      <div style={{ width: "100%", maxWidth: 500, background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "2rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+
+        <div>
+          <div style={{ fontSize: "1.5rem", marginBottom: "0.35rem" }}>🔗</div>
+          <h1 style={{ fontSize: "1.05rem", fontWeight: 700, marginBottom: "0.3rem" }}>Conectar cuenta eBay</h1>
+          <p style={{ fontSize: "0.8rem", color: "var(--text3)" }}>Vincula una cuenta de vendedor eBay a una de tus tiendas.</p>
         </div>
 
+        {/* Store selector */}
+        {stores.length === 0 ? (
+          <div style={{ padding: "0.85rem", background: "var(--bg3)", borderRadius: "var(--radius-sm)", fontSize: "0.83rem", color: "var(--amber)" }}>
+            ⚠ No tienes tiendas. Crea una desde el dashboard → Mis Tiendas.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+            <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text2)" }}>Tienda a conectar</label>
+            <select
+              value={selectedId}
+              onChange={e => setSelectedId(e.target.value)}
+              style={{ padding: "0.5rem 0.75rem", background: "var(--bg3)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.88rem", outline: "none" }}
+            >
+              {stores.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.name} {s.connected ? "✓ Conectada" : "— Sin conectar"}
+                </option>
+              ))}
+            </select>
+            {selectedStore?.connected && (
+              <p style={{ fontSize: "0.73rem", color: "var(--amber)" }}>⚠ Ya conectada. Reconectar reemplazará el token actual.</p>
+            )}
+          </div>
+        )}
+
+        {/* Steps */}
+        <div style={{ background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "0.85rem", fontSize: "0.78rem", color: "var(--text3)", lineHeight: 1.7 }}>
+          <strong style={{ color: "var(--text2)", display: "block", marginBottom: "0.3rem" }}>📋 Pasos:</strong>
+          1. Selecciona la tienda arriba<br />
+          2. Click en «Ir a eBay» — se abre en nueva pestaña<br />
+          3. Inicia sesión con tu cuenta de vendedor y autoriza<br />
+          4. eBay te redirigirá — copia la URL completa<br />
+          5. Pégala abajo y click «Conectar»
+        </div>
+
+        {/* Step 1 */}
         <button
           onClick={handleGoToEbay}
-          style={{ display: "block", width: "100%", textAlign: "center", background: "#2563eb", color: "#fff", padding: "0.65rem", borderRadius: 8, border: "none", marginBottom: "1.25rem", fontSize: "0.9rem", fontWeight: 600, cursor: "pointer" }}
+          disabled={!selectedId}
+          style={{ padding: "0.65rem", background: selectedId ? "var(--blue)" : "var(--bg3)", color: selectedId ? "#fff" : "var(--text3)", border: selectedId ? "none" : "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.9rem", cursor: selectedId ? "pointer" : "not-allowed" }}
         >
           → Ir a eBay a autorizar
         </button>
 
-        <textarea
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="Pega aquí la URL completa de eBay después de autorizar..."
-          style={{ width: "100%", minHeight: 90, background: "#0a0a0f", border: "1px solid #2d3748", borderRadius: 8, color: "#e2e8f0", padding: "0.75rem", fontSize: "0.8rem", resize: "vertical", boxSizing: "border-box" }}
-        />
+        {/* Step 2 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+          <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text2)" }}>URL de redirección de eBay</label>
+          <textarea
+            value={url}
+            onChange={e => setUrl(e.target.value)}
+            placeholder="Pega aquí la URL completa después de autorizar..."
+            rows={3}
+            style={{ padding: "0.65rem 0.75rem", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.8rem", resize: "vertical", outline: "none" }}
+          />
+        </div>
 
         {error && (
-          <p style={{ color: "#ef4444", fontSize: "0.8rem", margin: "0.5rem 0" }}>{error}</p>
+          <div style={{ padding: "0.55rem 0.8rem", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "var(--radius-sm)", color: "var(--red)", fontSize: "0.78rem" }}>
+            ❌ {error}
+          </div>
         )}
 
         <button
           onClick={handleConnect}
-          disabled={loading || !url.trim()}
-          style={{ width: "100%", marginTop: "0.75rem", padding: "0.7rem", background: "#10b981", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: "0.95rem", cursor: loading || !url.trim() ? "not-allowed" : "pointer", opacity: loading || !url.trim() ? 0.5 : 1 }}
+          disabled={loading || !url.trim() || !selectedId}
+          style={{ padding: "0.65rem", background: "var(--green)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 700, fontSize: "0.92rem", cursor: loading || !url.trim() || !selectedId ? "not-allowed" : "pointer", opacity: loading || !url.trim() || !selectedId ? 0.5 : 1 }}
         >
           {loading ? "Conectando..." : "✅ Conectar"}
         </button>
+
+        <a href="/" style={{ textAlign: "center", fontSize: "0.78rem", color: "var(--text3)", textDecoration: "none" }}>← Volver al dashboard</a>
       </div>
     </div>
+  );
+}
+
+export default function ConnectPage() {
+  return (
+    <Suspense>
+      <ConnectPageInner />
+    </Suspense>
   );
 }

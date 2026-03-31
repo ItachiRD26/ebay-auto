@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAppToken } from "@/lib/ebay";
-import { db, COLLECTIONS, DEFAULT_SETTINGS } from "@/lib/firebase";
+import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS, COLLECTIONS } from "@/lib/firebase";
 import { QueueProduct, Settings } from "@/types";
 
 const EXCLUDED_KEYWORDS = [
@@ -152,17 +152,19 @@ async function fetchEbayItem(
 
 export async function POST(req: NextRequest) {
   try {
-    const { urls } = await req.json();
+    const { urls, storeId, userId } = await req.json();
     if (!urls || !Array.isArray(urls) || urls.length === 0) {
       return NextResponse.json({ error: "URLs array required" }, { status: 400 });
     }
+    if (!storeId) return NextResponse.json({ error: "storeId required" }, { status: 400 });
+    if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
 
     const token = await getAppToken();
 
-    const settingsDoc = await db.collection(COLLECTIONS.SETTINGS).doc("main").get();
+    const settingsSnap = await getSettingsDoc(userId, "main").get();
     const settings = {
       ...DEFAULT_SETTINGS,
-      ...(settingsDoc.exists ? settingsDoc.data() : {}),
+      ...(settingsSnap.exists ? settingsSnap.data() : {}),
     } as Settings;
 
     const {
@@ -196,8 +198,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Duplicate check
-        const existing = await db
-          .collection(COLLECTIONS.QUEUE)
+        const existing = await queueCol(userId)
           .where("ebayItemId", "==", itemId)
           .limit(1)
           .get();
@@ -280,6 +281,8 @@ export async function POST(req: NextRequest) {
           ebayItemId:            itemId,
           title,
           images,
+          userId,
+          storeId,
           ebayReferencePrice:    price,
           ebayShippingCost,
           totalMarketCost,
@@ -302,7 +305,7 @@ export async function POST(req: NextRequest) {
           updatedAt:             Date.now(),
         };
 
-        const ref = db.collection(COLLECTIONS.QUEUE).doc();
+        const ref = queueCol(userId).doc();
         batch.set(ref, product);
         results.added++;
         console.log(`[import] ✅ AGREGADO: "${title.slice(0,50)}" $${price} → sugerido $${suggestedSellingPrice}`);

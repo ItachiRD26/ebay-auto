@@ -1,16 +1,19 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getUserToken } from "@/lib/ebay";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const token = await getUserToken();
+    const { searchParams } = new URL(req.url);
+    const storeId = searchParams.get("storeId");
+    if (!storeId) return NextResponse.json({ error: "storeId requerido" }, { status: 400 });
+
+    const token = await getUserToken(storeId);
 
     const headers = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     };
 
-    // Fetch both user-level AND app-level rate limits in parallel
     const [userRes, appRes] = await Promise.all([
       fetch("https://api.ebay.com/developer/analytics/v1_beta/user_rate_limit/", { headers, signal: AbortSignal.timeout(10000) }),
       fetch("https://api.ebay.com/developer/analytics/v1_beta/rate_limit/", { headers, signal: AbortSignal.timeout(10000) }),

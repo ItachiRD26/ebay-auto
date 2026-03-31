@@ -1,22 +1,27 @@
-import { NextResponse } from "next/server";
-import { db, COLLECTIONS } from "@/lib/firebase";
+import { NextRequest, NextResponse } from "next/server";
+import { db, COLLECTIONS, queueCol } from "@/lib/firebase";
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
-    const tokenDoc = await db.collection("tokens").doc("ebay_user").get();
+    const { storeId, userId } = await req.json();
+    if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
+    if (!storeId) return NextResponse.json({ error: "storeId required" }, { status: 400 });
+
+    const tokenDoc = await db.collection("tokens").doc(storeId).get();
     if (!tokenDoc.exists) return NextResponse.json({ error: "No token" }, { status: 401 });
     const userToken = tokenDoc.data()!.access_token;
 
-    // Get all published products with a listingId
-    const snap = await db.collection(COLLECTIONS.QUEUE)
+    // Get all published products for this store
+    const snap = await queueCol(userId)
       .where("status", "==", "published")
+      .where("storeId", "==", storeId)
       .get();
 
     const products = snap.docs
       .map(d => ({ id: d.id, ...d.data() } as { id: string; listingId?: string; title?: string }))
       .filter(p => p.listingId);
 
-    console.log(`[promote] Found ${products.length} published listings`);
+    console.log(`[promote] Found ${products.length} published listings for store ${storeId}`);
 
     const https = await import("node:https");
 
@@ -65,19 +70,12 @@ export async function POST() {
     let success = 0, failed = 0;
     for (const p of products) {
       const result = await revise(p.listingId!);
-      if (result.ok) {
-        success++;
-        console.log(`[promote] ✅ ${p.listingId} — ${p.title?.slice(0, 40)}`);
-      } else {
-        failed++;
-        console.warn(`[promote] ❌ ${p.listingId} — ${result.error}`);
-      }
+      if (result.ok) success++;
+      else failed++;
       await new Promise(r => setTimeout(r, 500));
     }
 
-    console.log(`[promote] Done — ✅ ${success} | ❌ ${failed}`);
     return NextResponse.json({ success: true, updated: success, failed });
-
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

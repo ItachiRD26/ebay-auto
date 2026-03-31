@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAppToken, getUserToken } from "@/lib/ebay";
-import { db, COLLECTIONS, DEFAULT_SETTINGS } from "@/lib/firebase";
+import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS } from "@/lib/firebase";
 import { QueueProduct, Settings } from "@/types";
 import { SELLER_CATEGORIES } from "@/api/ebay/discover-sellers/route";
 
@@ -22,17 +22,19 @@ const CONFIG = {
   MAX_VARIATIONS: 30,   // skip listings with too many variants
 };
 
-// Cache user token for Trading API calls
-let _userToken: string | null = null;
-let _tokenFetchedAt = 0;
+const _storeTokens: Record<string, { token: string; fetchedAt: number }> = {};
 
-async function getTradingData(numericId: string): Promise<{ soldCount: number; estimatedSold30d: number; listingAgeDays: number; shipFromCountry: string | null; variationCount: number }> {
+async function getTradingData(numericId: string, storeId: string): Promise<{ soldCount: number; estimatedSold30d: number; listingAgeDays: number; shipFromCountry: string | null; variationCount: number }> {
   const empty = { soldCount: 0, estimatedSold30d: 0, listingAgeDays: 0, shipFromCountry: null, variationCount: 0 };
   try {
-    if (!_userToken || Date.now() - _tokenFetchedAt > 55_000) {
-      _userToken = await getUserToken();
-      _tokenFetchedAt = Date.now();
+    if (!_storeTokens[storeId] || Date.now() - _storeTokens[storeId].fetchedAt > 55_000) {
+      try {
+        _storeTokens[storeId] = { token: await getUserToken(storeId), fetchedAt: Date.now() };
+      } catch {
+        return empty;
+      }
     }
+    const _userToken = _storeTokens[storeId].token;
     const xml = `<?xml version="1.0" encoding="utf-8"?>
 <GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <RequesterCredentials><eBayAuthToken>${_userToken}</eBayAuthToken></RequesterCredentials>
@@ -213,6 +215,8 @@ async function processItem(
   item: Record<string, unknown>,
   settings: Settings,
   seller: string,
+  storeId: string,
+  userId: string,
   _htmlSoldCount?: number
 ): Promise<{ added: boolean; reason: string; title: string }> {
   const title      = (item.title as string) ?? "";
@@ -238,16 +242,16 @@ async function processItem(
     return { added: false, reason: `pais ${summaryCountry}`, title: shortTitle };
 
   // Duplicate check by itemId
-  const dup = await db.collection(COLLECTIONS.QUEUE).where("ebayItemId", "==", numericId).limit(1).get();
+  const dup = await queueCol(userId).where("ebayItemId", "==", numericId).limit(1).get();
   if (!dup.empty) return { added: false, reason: "duplicado", title: shortTitle };
 
   // Duplicate check by normalized title
   const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
-  const titleDup = await db.collection(COLLECTIONS.QUEUE).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
+  const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
   if (!titleDup.empty) return { added: false, reason: "titulo duplicado", title: shortTitle };
 
   // Trading API: sales, country, variations
-  const td = await getTradingData(numericId);
+  const td = await getTradingData(numericId, storeId);
 
   if (td.shipFromCountry && !isChina(td.shipFromCountry))
     return { added: false, reason: `pais-trading ${td.shipFromCountry}`, title: shortTitle };
@@ -277,6 +281,8 @@ async function processItem(
     title,
     normalizedTitle,
     images:               imageUrls,
+    userId,
+    storeId,
     ebayReferencePrice:   ebayRefPrice,
     ebayShippingCost:     shippingCost,
     totalMarketCost,
@@ -299,15 +305,17 @@ async function processItem(
     updatedAt:            Date.now(),
   };
 
-  await db.collection(COLLECTIONS.QUEUE).add(product);
+  await queueCol(userId).add(product);
   return { added: true, reason: "ok", title: shortTitle };
 }
 
 // ─── POST handler ─────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    const { storeUrl, category } = await req.json() as { storeUrl: string; category?: string };
+    const { storeUrl, category, storeId, userId } = await req.json() as { storeUrl: string; category?: string; storeId: string; userId: string };
     if (!storeUrl) return NextResponse.json({ error: "storeUrl requerida" }, { status: 400 });
+    if (!storeId)  return NextResponse.json({ error: "storeId required" },  { status: 400 });
+    if (!userId)   return NextResponse.json({ error: "userId required" },   { status: 400 });
 
     const seller = extractSeller(storeUrl);
     if (!seller) return NextResponse.json({ error: "No se pudo extraer el nombre del vendedor de la URL" }, { status: 400 });
@@ -317,9 +325,9 @@ export async function POST(req: NextRequest) {
     const token = await getAppToken();
 
     // Load settings for markup
-    const settingsDoc = await db.collection("settings").doc("main").get();
-    const settings: Settings = settingsDoc.exists
-      ? (settingsDoc.data() as Settings)
+    const settingsSnap = await getSettingsDoc(userId, "main").get();
+    const settings: Settings = settingsSnap.exists
+      ? (settingsSnap.data() as Settings)
       : DEFAULT_SETTINGS;
 
     // Single pass with keywords — stop a keyword early if yield drops
@@ -370,7 +378,7 @@ export async function POST(req: NextRequest) {
         for (const item of newItems) {
           totalChecked++;
           kwNew++;
-          const { added, reason, title } = await processItem(item, settings, seller, undefined);
+          const { added, reason, title } = await processItem(item, settings, seller, storeId, userId, undefined);
           if (added) totalAdded++;
           else {
             totalSkipped++;

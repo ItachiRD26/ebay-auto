@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { db, COLLECTIONS } from "@/lib/firebase";
+import { NextRequest, NextResponse } from "next/server";
+import { db, COLLECTIONS, queueCol } from "@/lib/firebase";
 import { getUserToken } from "@/lib/ebay";
 
 const EXCLUDED_KEYWORDS = [
@@ -119,12 +119,19 @@ async function endListing(listingId: string, userToken: string): Promise<boolean
   });
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
-    const userToken = await getUserToken();
+    const { storeId, userId } = await req.json();
+    if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
+    if (!storeId) return NextResponse.json({ error: "storeId required" }, { status: 400 });
 
-    const snap = await db.collection(COLLECTIONS.QUEUE)
+    const tokenDoc = await db.collection("tokens").doc(storeId).get();
+    if (!tokenDoc.exists) return NextResponse.json({ error: "Tienda no conectada" }, { status: 401 });
+    const userToken = tokenDoc.data()!.access_token as string;
+
+    const snap = await queueCol(userId)
       .where("status", "==", "published")
+      .where("storeId", "==", storeId)
       .get();
 
     const products = snap.docs.map(d => ({ id: d.id, ...d.data() } as {
@@ -146,7 +153,7 @@ export async function POST() {
           console.log(`[clean] ${ok ? "✅" : "⚠️"} Delisted ${p.listingId} — "${p.title.slice(0, 50)}"`);
         }
         // Move to rejected in Firestore
-        await db.collection(COLLECTIONS.QUEUE).doc(p.id).update({
+        await queueCol(userId).doc(p.id).update({
           status: "rejected",
           failReason: "Eliminado por filtro de keywords baneadas",
           updatedAt: Date.now(),

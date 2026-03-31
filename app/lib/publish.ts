@@ -1,5 +1,5 @@
-import { db, COLLECTIONS } from "@/lib/firebase";
-import { getReferenceItemData, getCategoryIdForTitle, getTradingCategoryForTitle } from "@/lib/ebay";
+import { db, COLLECTIONS, queueCol } from "@/lib/firebase";
+import { getCategoryIdForTitle } from "@/lib/ebay";
 
 interface VariationSpec { specifics: Record<string, string>; refPrice: number; }
 interface VariationsData { variations: VariationSpec[]; specificsSet: Record<string, string[]>; picturesByVariant: Record<string, string[]>; pictureDimension: string; }
@@ -43,8 +43,7 @@ async function findAlternativeReference(title: string, originalItemId: string, u
       const numericId = rawId.split("|")[1] ?? rawId;
       if (numericId === originalItemId) continue;
       if (numericId.startsWith(originalItemId.slice(0, 6))) continue;
-      const { getReferenceItemData } = await import("@/lib/ebay");
-      const refData = await getReferenceItemData(numericId, userToken);
+      const refData = await getReferenceItemDataLocal(numericId, userToken);
       if (!refData) continue;
       console.log(`[publish] 🔍 Alt ref: ${numericId} — ${Object.keys(refData.aspects).length} aspects`);
       return { itemId: numericId, categoryId: refData.categoryId, aspects: refData.aspects, images: refData.imageUrls };
@@ -256,8 +255,59 @@ async function addFixedPriceItem(product: {
   return { itemId: itemMatch[1] };
 }
 
-export async function publishProductById(productId: string, userToken: string): Promise<{ listingId: string }> {
-  const docRef = db.collection(COLLECTIONS.QUEUE).doc(productId);
+
+// Local helper — fetches reference item data via Trading API GetItem
+async function getReferenceItemDataLocal(numericItemId: string, userToken: string): Promise<{ title: string; description: string; categoryId: string; aspects: Record<string, string[]>; imageUrls: string[]; condition: string; variations: null } | null> {
+  try {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
+  <ItemID>${numericItemId}</ItemID>
+  <DetailLevel>ItemReturnDescription</DetailLevel>
+  <IncludeItemSpecifics>true</IncludeItemSpecifics>
+</GetItemRequest>`;
+    const res = await fetch("https://api.ebay.com/ws/api.dll", {
+      method: "POST",
+      headers: { "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "967", "X-EBAY-API-CALL-NAME": "GetItem", "Content-Type": "text/xml" },
+      body: xml, signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (text.includes("<Ack>Failure</Ack>")) return null;
+
+    const catMatch   = text.match(/<CategoryID>(\d+)<\/CategoryID>/);
+    const titleMatch = text.match(/<Title>(.*?)<\/Title>/);
+    const descMatch  = text.match(/<Description><!\[CDATA\[([\s\S]*?)\]\]><\/Description>/);
+    const condMatch  = text.match(/<ConditionDisplayName>(.*?)<\/ConditionDisplayName>/);
+
+    // Extract item specifics as aspects
+    const aspects: Record<string, string[]> = {};
+    const specificMatches = text.matchAll(/<NameValueList>\s*<Name>(.*?)<\/Name>\s*<Value>(.*?)<\/Value>/g);
+    for (const m of specificMatches) {
+      const key = m[1].trim();
+      if (!aspects[key]) aspects[key] = [];
+      aspects[key].push(m[2].trim());
+    }
+
+    // Extract picture URLs
+    const imageUrls: string[] = [];
+    const picMatches = text.matchAll(/<PictureURL>(.*?)<\/PictureURL>/g);
+    for (const m of picMatches) imageUrls.push(m[1].trim());
+
+    return {
+      title: titleMatch?.[1] ?? "",
+      description: descMatch?.[1] ?? "",
+      categoryId: catMatch?.[1] ?? "",
+      aspects,
+      imageUrls,
+      condition: condMatch?.[1] ?? "New",
+      variations: null,
+    };
+  } catch { return null; }
+}
+
+export async function publishProductById(productId: string, userToken: string, userId: string): Promise<{ listingId: string }> {
+  const docRef = queueCol(userId).doc(productId);
   const doc = await docRef.get();
   if (!doc.exists) throw new Error("Product not found");
   const product = doc.data()!;
@@ -282,13 +332,13 @@ export async function publishProductById(productId: string, userToken: string): 
     const parts = rawId.split("|");
     const numericItemId = parts.length >= 2 ? parts[1] : rawId;
     console.log(`[publish] GetItem ref → rawId="${rawId}" numericId="${numericItemId}"`);
-    const refData = await getReferenceItemData(numericItemId, userToken);
+    const refData = await getReferenceItemDataLocal(numericItemId, userToken);
     console.log(`[publish] refData=${refData ? "OK" : "NULL"}`);
     if (refData) {
       refAspects = refData.aspects;
       if (refData.categoryId) refCategoryId = refData.categoryId;
       const merged = [...refImages];
-      refData.imageUrls.forEach(u => { if (!merged.includes(u)) merged.push(u); });
+      refData.imageUrls.forEach((u: string) => { if (!merged.includes(u)) merged.push(u); });
       refImages = merged.slice(0, 12);
       refVariations = (refData as unknown as ReferenceItemData).variations ?? null;
       const MAX_VARIATIONS = 12;
@@ -369,16 +419,13 @@ export async function publishProductById(productId: string, userToken: string): 
         }
       } else if (retryMsg.includes("improper") || retryMsg.includes("policy")) {
         // Confirmed seller-blocked — auto-reject so it doesn't stay in failed
-        await db.collection(COLLECTIONS.QUEUE).doc(productId).update({ status: "rejected", failReason: "Vendedor de referencia bloqueado por eBay", updatedAt: Date.now() });
+        await queueCol(userId).doc(productId).update({ status: "rejected", failReason: "Vendedor de referencia bloqueado por eBay", updatedAt: Date.now() });
         throw new Error("AUTO-RECHAZADO: vendedor de referencia bloqueado por eBay");
       } else throw retryErr;
     }
   }
 
-  const batch = db.batch();
-  batch.update(docRef, { status: "published", publishedAt: Date.now(), listingId: itemId!, bidPercentage: 2.0, updatedAt: Date.now() });
-  batch.set(db.collection(COLLECTIONS.PUBLISHED).doc(productId), { ...product, status: "published", publishedAt: Date.now(), listingId: itemId! });
-  await batch.commit();
+  await docRef.update({ status: "published", publishedAt: Date.now(), listingId: itemId!, bidPercentage: 2.0, updatedAt: Date.now() });
 
   await new Promise(r => setTimeout(r, 3000));
   await applyPromotedListing(itemId!, userToken);
@@ -404,7 +451,7 @@ async function applyPromotedListing(listingId: string, userToken: string): Promi
   } catch (e) { console.warn(`[promote] ⚠️ Error for ${listingId}:`, e instanceof Error ? e.message : e); }
 }
 
-export async function markPublishFailed(productId: string, reason: string): Promise<void> {
-  await db.collection(COLLECTIONS.QUEUE).doc(productId).update({ status: "failed", failReason: reason, updatedAt: Date.now() });
+export async function markPublishFailed(productId: string, reason: string, userId: string): Promise<void> {
+  await queueCol(userId).doc(productId).update({ status: "failed", failReason: reason, updatedAt: Date.now() });
   console.log(`[publish] ⚠️ ${productId} → failed: ${reason}`);
 }

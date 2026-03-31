@@ -4,19 +4,21 @@ import { publishProductById, markPublishFailed } from "@/lib/publish";
 
 export async function POST(req: NextRequest) {
   try {
-    const { productId } = await req.json();
+    const { productId, storeId, userId } = await req.json();
     if (!productId) return NextResponse.json({ error: "productId required" }, { status: 400 });
+    if (!storeId)   return NextResponse.json({ error: "storeId required" },   { status: 400 });
+    if (!userId)    return NextResponse.json({ error: "userId required" },    { status: 400 });
 
-    const tokenDoc = await db.collection("tokens").doc("ebay_user").get();
-    if (!tokenDoc.exists) return NextResponse.json({ error: "eBay no conectado. Ve a /connect." }, { status: 401 });
+    const tokenDoc = await db.collection("tokens").doc(storeId).get();
+    if (!tokenDoc.exists) return NextResponse.json({ error: `Tienda "${storeId}" no conectada. Ve a Mis Tiendas → Conectar.` }, { status: 401 });
     const userToken = tokenDoc.data()!.access_token;
 
     try {
-      const { listingId } = await publishProductById(productId, userToken);
+      const { listingId } = await publishProductById(productId, userToken, userId);
       return NextResponse.json({ success: true, listingId });
     } catch (publishError: unknown) {
       const reason = publishError instanceof Error ? publishError.message : String(publishError);
-      await markPublishFailed(productId, reason);
+      await markPublishFailed(productId, reason, userId);
       return NextResponse.json({ error: reason, failed: true }, { status: 500 });
     }
 

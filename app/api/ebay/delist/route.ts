@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db, COLLECTIONS } from "@/lib/firebase";
+import { db, COLLECTIONS, queueCol } from "@/lib/firebase";
 
 export async function POST(req: NextRequest) {
   try {
-    const { productId, listingId } = await req.json();
+    const { productId, listingId, storeId, userId } = await req.json();
+    if (!userId) return NextResponse.json({ error: "userId required" }, { status: 400 });
     if (!productId || !listingId) return NextResponse.json({ error: "productId y listingId requeridos" }, { status: 400 });
+    if (!storeId) return NextResponse.json({ error: "storeId requerido" }, { status: 400 });
 
-    const tokenDoc = await db.collection("tokens").doc("ebay_user").get();
+    const tokenDoc = await db.collection("tokens").doc(storeId).get();
     if (!tokenDoc.exists) return NextResponse.json({ error: "No token" }, { status: 401 });
     const userToken = tokenDoc.data()!.access_token;
 
@@ -44,17 +46,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: m?.[1] ?? "Error al deslistar" }, { status: 500 });
     }
 
-    // Update Firestore — move back to rejected
-    await db.collection(COLLECTIONS.QUEUE).doc(productId).update({
+    await queueCol(userId).doc(productId).update({
       status: "rejected",
       listingId: null,
       delistedAt: Date.now(),
       updatedAt: Date.now(),
     });
 
-    console.log(`[delist] ✅ ${listingId} eliminado`);
     return NextResponse.json({ success: true });
-
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

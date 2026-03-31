@@ -13,30 +13,36 @@ if (!getApps().length) {
 
 export const db = getFirestore();
 
+// ─── Subcollection helper ─────────────────────────────────────────────────────
+// All user data lives under users/{userId}/* for isolation and security.
+// tokens/{storeId} stays at root — keyed by storeId, not userId.
+export const userCol = (userId: string, col: string) =>
+  db.collection("users").doc(userId).collection(col);
+
+// Convenience shorthands
+export const queueCol    = (userId: string) => userCol(userId, "products_queue");
+export const storesCol   = (userId: string) => userCol(userId, "stores");
+export const settingsDoc = (userId: string, docId = "main") =>
+  db.collection("users").doc(userId).collection("settings").doc(docId);
+
+// Legacy flat-collection names kept for reference (no longer used for products)
 export const COLLECTIONS = {
-  QUEUE: "products_queue",
-  PUBLISHED: "published",
+  QUEUE:    "products_queue",
   SETTINGS: "settings",
-  LOGS: "logs",
+  LOGS:     "logs",
 };
 
 export const DEFAULT_SETTINGS = {
-  // Pricing filters
   minPrice: 15,
   maxPrice: 150,
-  markupPercent: 40,
-  // Sales filter
-  minSoldCount: 2,
-  // Margin
+  markupPercent: 6,
+  minSoldCount: 5,
   minMarginPercent: 30,
-  // Listing
-  defaultStock: 10,
+  defaultStock: 1,
   ebayMarketplace: "EBAY_US",
-  // Search
   autoSearchEnabled: false,
   searchIntervalMinutes: 60,
   searchKeywords: [],
-  // Extra filters
   onlyFreeShipping: false,
   onlyNewCondition: true,
 };

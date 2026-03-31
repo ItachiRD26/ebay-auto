@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase";
 
-// GET — eBay redirige aquí después de autorizar
+// GET — eBay redirige aquí después de autorizar (con state=storeId)
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const code = searchParams.get("code");
+    const code  = searchParams.get("code");
     const error = searchParams.get("error");
+    const storeId = searchParams.get("state"); // storeId encoded in state
 
     if (error || !code) {
       return NextResponse.redirect(
@@ -14,11 +15,16 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    if (!storeId || !storeId.startsWith("store_")) {
+      return NextResponse.redirect(
+        `${process.env.NEXT_PUBLIC_APP_URL}/settings?error=invalid_state`
+      );
+    }
+
     const credentials = Buffer.from(
       `${process.env.EBAY_CLIENT_ID}:${process.env.EBAY_CLIENT_SECRET}`
     ).toString("base64");
 
-    // ⚠️ En el token exchange se usa el RuName, NO la URL real
     const tokenRes = await fetch(
       "https://api.ebay.com/identity/v1/oauth2/token",
       {
@@ -30,7 +36,7 @@ export async function GET(req: NextRequest) {
         body: new URLSearchParams({
           grant_type: "authorization_code",
           code,
-          redirect_uri: process.env.EBAY_REDIRECT_URI!, // RuName aquí
+          redirect_uri: process.env.EBAY_REDIRECT_URI!,
         }),
       }
     );
@@ -43,15 +49,22 @@ export async function GET(req: NextRequest) {
 
     const tokens = await tokenRes.json();
 
-    await db.collection("tokens").doc("ebay_user").set({
-      access_token: tokens.access_token,
+    // Store token under the specific storeId
+    await db.collection("tokens").doc(storeId).set({
+      access_token:  tokens.access_token,
       refresh_token: tokens.refresh_token,
-      expiresAt: Date.now() + tokens.expires_in * 1000,
-      createdAt: Date.now(),
+      expiresAt:     Date.now() + tokens.expires_in * 1000,
+      createdAt:     Date.now(),
     });
 
+    // Mark store as connected
+    await db.collection("stores").doc(storeId).update({
+      connected:    true,
+      connectedAt:  Date.now(),
+    }).catch(() => {}); // store doc might not exist if connecting manually
+
     return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/settings?success=connected`
+      `${process.env.NEXT_PUBLIC_APP_URL}/settings?success=connected&storeId=${storeId}`
     );
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -62,23 +75,33 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST — Genera URL de autorización
-export async function POST() {
-  const scopes = [
-    "https://api.ebay.com/oauth/api_scope",
-    "https://api.ebay.com/oauth/api_scope/sell.inventory",
-    "https://api.ebay.com/oauth/api_scope/sell.account",
-    "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
-  ].join(" ");
+// POST — Genera URL de autorización para un storeId específico
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const storeId = body.storeId as string;
 
-  // ⚠️ En la URL de autorización el redirect_uri es el RuName sin encodear
-  const url =
-    `https://auth.ebay.com/oauth2/authorize` +
-    `?client_id=${process.env.EBAY_CLIENT_ID}` +
-    `&response_type=code` +
-    `&redirect_uri=${process.env.EBAY_REDIRECT_URI}` +  // RuName sin encodeURIComponent
-    `&scope=${encodeURIComponent(scopes)}` +
-    `&state=dropflow_state`;
+    if (!storeId) {
+      return NextResponse.json({ error: "storeId requerido" }, { status: 400 });
+    }
 
-  return NextResponse.json({ url });
+    const scopes = [
+      "https://api.ebay.com/oauth/api_scope",
+      "https://api.ebay.com/oauth/api_scope/sell.inventory",
+      "https://api.ebay.com/oauth/api_scope/sell.account",
+      "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+    ].join(" ");
+
+    const url =
+      `https://auth.ebay.com/oauth2/authorize` +
+      `?client_id=${process.env.EBAY_CLIENT_ID}` +
+      `&response_type=code` +
+      `&redirect_uri=${process.env.EBAY_REDIRECT_URI}` +
+      `&scope=${encodeURIComponent(scopes)}` +
+      `&state=${storeId}`; // Pass storeId as state
+
+    return NextResponse.json({ url });
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
 }

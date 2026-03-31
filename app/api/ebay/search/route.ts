@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchProducts, getUserToken } from "@/lib/ebay";
-import { db, COLLECTIONS } from "@/lib/firebase";
+import { queueCol } from "@/lib/firebase";
 import { QueueProduct } from "@/types";
+import { resetProgress, updateProgress, endProgress } from "@/lib/search-progress";
 
 // ─── Dropshipping config ──────────────────────────────────────────────────────
 const CONFIG = {
@@ -16,71 +17,32 @@ const CONFIG = {
   ITEMS_PER_SEARCH:   200,   // Browse API max per request
 };
 
-// ─── Keyword list for auto-search ────────────────────────────────────────────
-const AUTO_KEYWORDS = [
-  // 🍳 Cocina viral (alta demanda, precio $25-80)
-  "vegetable chopper","mandoline slicer","garlic press","salad spinner",
-  "silicone baking mat","oil sprayer","avocado slicer","egg slicer",
-  "food storage container set","meal prep container","bento lunch box",
-  "dish drying rack","sink organizer","spice rack organizer",
+// ─── Keywords — loaded dynamically from Firestore, fallback to defaults ─────────
+import { DEFAULT_AUTO_KEYWORDS, DEFAULT_EXCLUDED_KEYWORDS } from "@/api/ebay/keywords/route";
+import { settingsDoc } from "@/lib/firebase";
 
-  // 🧹 Limpieza (constante demanda)
-  "electric scrubber brush","lint roller refill","spin mop replacement",
-  "drain hair catcher","squeegee window cleaner","microfiber cleaning cloth set",
+// 60-second in-memory cache so we don't hit Firestore on every item
+let _kwCache: { auto: string[]; excluded: string[]; fetchedAt: number } | null = null;
 
-  // 🚿 Baño organización
-  "shower caddy organizer","over toilet storage rack","bathroom shelf organizer",
-  "toothbrush holder wall","soap dispenser pump","non slip bath mat",
+async function getKeywords(userId: string): Promise<{ auto: string[]; excluded: string[] }> {
+  if (_kwCache && Date.now() - _kwCache.fetchedAt < 60_000) return _kwCache;
+  try {
+    const snap = await settingsDoc(userId, "keywords").get();
+    const data = snap.exists ? snap.data() : {};
+    _kwCache = {
+      auto:     data?.autoKeywords?.length     ? data.autoKeywords     : DEFAULT_AUTO_KEYWORDS,
+      excluded: data?.excludedKeywords?.length ? data.excludedKeywords : DEFAULT_EXCLUDED_KEYWORDS,
+      fetchedAt: Date.now(),
+    };
+  } catch {
+    _kwCache = { auto: DEFAULT_AUTO_KEYWORDS, excluded: DEFAULT_EXCLUDED_KEYWORDS, fetchedAt: Date.now() };
+  }
+  return _kwCache;
+}
 
-  // 🐾 Mascotas (nicho creciente)
-  "slow feeder dog bowl","automatic pet feeder","pet water fountain",
-  "dog grooming brush","no pull dog harness","cat tunnel toy",
-  "pet carrier backpack","dog poop bag holder",
-
-  // 📱 Tech accesorios (alta rotación)
-  "phone stand adjustable","laptop stand portable","cable organizer desk",
-  "wireless charging pad","desk organizer set","monitor stand riser",
-
-  // ✈️ Viaje
-  "packing cube set","toiletry bag hanging","passport holder rfid",
-  "luggage scale digital","travel adapter universal",
-
-  // 💪 Fitness
-  "resistance band set","yoga mat non slip","foam roller muscle",
-  "jump rope speed","ab wheel roller",
-
-  // 🏠 Decoración / Organización
-  "floating shelf wall","drawer organizer bamboo","closet organizer set",
-  "under bed storage","fridge storage bin","lazy susan organizer",
-
-  // 🌿 Cuidado personal
-  "jade face roller","makeup brush set","hair claw clip set",
-  "scalp massager shampoo","nail art brush kit",
-];
-
-const EXCLUDED_KEYWORDS: string[] = [
-  // ── Major brands ──────────────────────────────────────────────────────────
-  "iphone","samsung galaxy","apple watch","airpods","macbook","ipad",
-  "playstation","xbox","nintendo switch","nvidia","radeon",
-  "nike","adidas","gucci","louis vuitton","supreme","yeezy","jordan","off-white",
-  "balenciaga","versace","prada","dior","burberry","chanel","hermes","fendi",
-  "lululemon","north face","under armour","new balance","reebok","vans","converse",
-  "timberland","owala","stanley cup","hydro flask","yeti","contigo","camelbak",
-  "ralph lauren","lacoste","tommy hilfiger","calvin klein","hugo boss",
-  "michael kors","coach","kate spade","marc jacobs","victoria secret",
-  "lego","barbie","disney","marvel","pokemon","naruto","one piece","dragon ball",
-  "rolex","omega watch","cartier","tiffany",
-  // ── Sexual / adult ────────────────────────────────────────────────────────
-  "dildo","vibrator","sex toy","anal","butt plug","penis enlargement",
-  "male enhancement","adult toy","erection","cock ring","chastity",
-  "penis pump","penile","erectile","extender penis",
-];
-
-// Auto-generated from EXCLUDED_KEYWORDS — checks title for any brand mention
-
-function isBanned(title: string): boolean {
+function isBannedWith(title: string, excluded: string[]): boolean {
   const t = title.toLowerCase();
-  return EXCLUDED_KEYWORDS.some((kw) => t.includes(kw.toLowerCase()));
+  return excluded.some((kw) => t.includes(kw.toLowerCase()));
 }
 
 function extractNumericId(browseItemId: string): string {
@@ -174,17 +136,23 @@ interface TradingItemData {
   shipFromCountry:  string | null;
 }
 
-let cachedUserToken: string | null = null;
-let tokenFetchedAt = 0;
+const _tokenCache: Record<string, { token: string; fetchedAt: number }> = {};
 
-async function getItemDataViaTradingAPI(numericItemId: string): Promise<TradingItemData> {
+async function getItemDataViaTradingAPI(numericItemId: string, storeId: string): Promise<TradingItemData> {
   const empty: TradingItemData = { soldCount: 0, estimatedSold30d: 0, listingAgeDays: 0, shipFromCountry: null };
 
   try {
-    if (!cachedUserToken || Date.now() - tokenFetchedAt > 60_000) {
-      cachedUserToken = await getUserToken();
-      tokenFetchedAt = Date.now();
+    if (!_tokenCache[storeId] || Date.now() - _tokenCache[storeId].fetchedAt > 60_000) {
+      try {
+        _tokenCache[storeId] = { token: await getUserToken(storeId), fetchedAt: Date.now() };
+      } catch {
+        // Store not connected — no user token available.
+        // Return empty so item gets filtered by MIN_SOLD_TOTAL (soldCount = 0).
+        // No error spam — this is expected when store isn't connected yet.
+        return empty;
+      }
     }
+    const cachedUserToken = _tokenCache[storeId].token;
 
     const xml = `<?xml version="1.0" encoding="utf-8"?>
 <GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
@@ -269,6 +237,9 @@ function notChina(country: string | null | undefined): boolean {
 async function processItem(
   item: Record<string, unknown>,
   label: string,
+  storeId: string,
+  userId: string,
+  excluded: string[],
 ): Promise<string | false> {
   const title      = (item.title as string) ?? "";
   const itemId     = item.itemId as string;
@@ -284,7 +255,7 @@ async function processItem(
     console.log(`   SKIP [precio] "${title.slice(0,50)}" $${pricing.ebayRefPrice}`);
     return false;
   }
-  if (isBanned(title)) {
+  if (isBannedWith(title, excluded)) {
     console.log(`   SKIP [banned] "${title.slice(0,50)}"`);
     return false;
   }
@@ -305,7 +276,7 @@ async function processItem(
   }
 
   // ── 4. Trading API: sales data + country confirmation ──────────────────────
-  const td = await getItemDataViaTradingAPI(numericId);
+  const td = await getItemDataViaTradingAPI(numericId, storeId);
 
   // Confirm China origin via Trading API
   if (notChina(td.shipFromCountry)) {
@@ -333,7 +304,7 @@ async function processItem(
   }
 
   // ── 6. Duplicate check ──────────────────────────────────────────────────────
-  const dup = await db.collection(COLLECTIONS.QUEUE).where("ebayItemId", "==", numericId).limit(1).get();
+  const dup = await queueCol(userId).where("ebayItemId", "==", numericId).limit(1).get();
   if (!dup.empty) {
     console.log(`      ⚠️  DUPLICADO (itemId)`);
     return false;
@@ -341,7 +312,7 @@ async function processItem(
 
   // Also check by normalized title (first 60 chars) to catch same product with diff ID
   const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
-  const titleDup = await db.collection(COLLECTIONS.QUEUE)
+  const titleDup = await queueCol(userId)
     .where("normalizedTitle", "==", normalizedTitle).limit(1).get();
   if (!titleDup.empty) {
     console.log(`      ⚠️  DUPLICADO (título: "${normalizedTitle.slice(0, 40)}")`);
@@ -358,6 +329,8 @@ async function processItem(
       : []);
 
   const queueProduct: Omit<QueueProduct, "id"> = {
+    userId,
+    storeId,
     ebayItemId:            numericId,  // numeric only — needed for Trading API GetItem
     title,
     normalizedTitle:       title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim(),
@@ -385,22 +358,27 @@ async function processItem(
     expiresAt:             new Date(Date.now() + 24 * 60 * 60 * 1000),
   };
 
-  const docRef = db.collection(COLLECTIONS.QUEUE).doc();
+  const docRef = queueCol(userId).doc();
   await docRef.set({ ...queueProduct, status: "approved" });
   return docRef.id; // return ID for auto-publish
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
-export async function GET() {
-  return NextResponse.json({ keywords: AUTO_KEYWORDS });
+export async function GET(req: NextRequest) {
+  const uid = new URL(req.url).searchParams.get("userId") ?? "";
+  const kws = await getKeywords(uid);
+  return NextResponse.json({ keywords: kws.auto, excludedKeywords: kws.excluded });
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { keywords, limit = 50, autoSearch = false } = body;
+    const { keywords, limit = 50, autoSearch = false, storeId, userId } = body;
+    if (!storeId) return NextResponse.json({ error: "storeId required" }, { status: 400 });
+    if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
 
     let totalAdded = 0;
+    const kws = await getKeywords(userId);
 
     // Single keyword search (frontend loops for auto-search)
     const kw = keywords || "";
@@ -421,16 +399,24 @@ export async function POST(req: NextRequest) {
     let totalReviewed = 0;
     let totalSkipped = 0;
 
+    // Reset server-side progress so the polling endpoint shows live data
+    resetProgress(items.length);
+    updateProgress({ keyword: kw });
+
     for (const item of items) {
       totalReviewed++;
-      const productId = await processItem(item, kw);
+      const productId = await processItem(item, kw, storeId, userId, kws.excluded);
       if (productId) {
-        totalAdded++; // saved as "approved" — waits for manual review
+        totalAdded++;
       } else {
         totalSkipped++;
       }
+      // Update server-side progress after every item — frontend polls this
+      updateProgress({ reviewed: totalReviewed, passed: totalAdded });
       await new Promise((r) => setTimeout(r, 200));
     }
+
+    endProgress();
 
     return NextResponse.json({ success: true, added: totalAdded, published: 0, reviewed: totalReviewed, skipped: totalSkipped });
 

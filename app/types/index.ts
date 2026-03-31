@@ -1,23 +1,38 @@
+export interface Store {
+  id: string;
+  name: string;           // User-defined nickname, e.g. "US Store"
+  marketplace: string;    // "EBAY_US" | "EBAY_UK" | "EBAY_DE" | etc.
+  connected: boolean;
+  connectedAt?: number;
+  ebayUsername?: string;  // Populated after successful OAuth
+  createdAt: number;
+  userId: string;         // Firebase Auth uid of the owner
+}
+
 export interface QueueProduct {
   id: string;
   ebayItemId: string;
   title: string;
   images: string[];
 
+  // Ownership
+  userId?: string;
+  storeId?: string;
+
   // Pricing — reference listing (Chinese seller on eBay)
-  ebayReferencePrice:    number;  // raw listing price of the reference item
-  ebayShippingCost:      number;  // what reference seller charges for shipping (0 = free)
-  totalMarketCost:       number;  // ebayReferencePrice + ebayShippingCost = true buyer cost
+  ebayReferencePrice:    number;
+  ebayShippingCost:      number;
+  totalMarketCost:       number;
 
-  // Pricing — our listing (FREE shipping)
-  suggestedSellingPrice: number;  // recommended price for our listing (3% below totalMarketCost)
+  // Pricing — our listing
+  suggestedSellingPrice: number;
 
-  // Eprolo sourcing (filled after Eprolo lookup)
+  // Eprolo sourcing
   eproloPrice:           number | null;
   eproloUrl:             string | null;
 
-  // Profit (filled once eproloPrice is known)
-  margin:                number | null;  // suggestedSellingPrice - eproloPrice - eproloShipping - eBayFees
+  // Profit
+  margin:                number | null;
   marginPercent:         number | null;
 
   // Categorization
@@ -25,9 +40,9 @@ export interface QueueProduct {
   categoryName: string;
 
   // Sales intelligence
-  soldCount:        number;  // total sold on reference listing (all time, current period)
-  estimatedSold30d: number;  // estimated sales in last 30 days (velocity * decay factor)
-  listingAgeDays:   number;  // age of reference listing in days
+  soldCount:        number;
+  estimatedSold30d: number;
+  listingAgeDays:   number;
 
   // Listing metadata
   condition:   string;
@@ -46,26 +61,20 @@ export interface QueueProduct {
 
   createdAt: number;
   updatedAt: number;
-  expiresAt?: Date;  // TTL: auto-delete after 24h (eBay Content policy)
+  expiresAt?: Date;
 }
 
 export interface Settings {
-  // Pricing
   minPrice: number;
   maxPrice: number;
   markupPercent: number;
-  // Sales
   minSoldCount: number;
-  // Margin
   minMarginPercent: number;
-  // Listing
   defaultStock: number;
   ebayMarketplace: string;
-  // Search
   autoSearchEnabled: boolean;
   searchIntervalMinutes: number;
   searchKeywords: string[];
-  // Filters
   onlyFreeShipping: boolean;
   onlyNewCondition: boolean;
 }
