@@ -326,9 +326,9 @@ export async function POST(req: NextRequest) {
 
     // Load settings for markup
     const settingsSnap = await getSettingsDoc(userId, "main").get();
-    const settings: Settings = settingsSnap.exists
-      ? (settingsSnap.data() as Settings)
-      : DEFAULT_SETTINGS;
+    const settings = (settingsSnap.exists
+      ? (settingsSnap.data() as unknown)
+      : DEFAULT_SETTINGS) as Settings;
 
     // Single pass with keywords — stop a keyword early if yield drops
     // Use category keywords if available — much more targeted than letters

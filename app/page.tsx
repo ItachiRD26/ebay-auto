@@ -245,15 +245,22 @@ export default function Dashboard() {
     setPublishTarget(product);
   };
 
-  const handlePublishConfirm = async (productId: string, storeId: string) => {
-    const res  = await fetch("/api/ebay/publish", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productId, storeId, userId: uid }),
-    });
-    const data = await res.json();
-    if (data.error) { toast("❌ " + data.error, "err"); throw new Error(data.error); }
-    toast("✅ Publicado correctamente", "ok");
+  const handlePublishConfirm = async (productId: string, storeIds: string[]) => {
+    const errors: string[] = [];
+    for (const storeId of storeIds) {
+      const res  = await fetch("/api/ebay/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId, storeId, userId: uid }),
+      });
+      const data = await res.json();
+      if (data.error) errors.push(`${stores.find(s => s.id === storeId)?.name ?? storeId}: ${data.error}`);
+    }
+    if (errors.length) {
+      toast("❌ " + errors.join(" | "), "err");
+      throw new Error(errors.join(", "));
+    }
+    toast(`✅ Publicado en ${storeIds.length} tienda${storeIds.length > 1 ? "s" : ""}`, "ok");
   };
 
   // ── Publish all (uses selectedStoreId) ────────────────────────────────────────

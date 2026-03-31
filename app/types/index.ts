@@ -64,11 +64,19 @@ export interface QueueProduct {
   expiresAt?: Date;
 }
 
+export interface StorePolicy {
+  fulfillmentPolicyId: string;
+  paymentPolicyId:     string;
+  returnPolicyId:      string;
+  merchantLocationKey: string;
+}
+
 export interface Settings {
   minPrice: number;
   maxPrice: number;
   markupPercent: number;
-  minSoldCount: number;
+  minSoldCount: number;       // minimum total sales
+  minSold30d: number;         // minimum estimated sales last 30 days (editable)
   minMarginPercent: number;
   defaultStock: number;
   ebayMarketplace: string;
@@ -77,4 +85,6 @@ export interface Settings {
   searchKeywords: string[];
   onlyFreeShipping: boolean;
   onlyNewCondition: boolean;
+  // Per-user eBay policies (override .env values)
+  policies?: Record<string, StorePolicy>; // keyed by storeId
 }

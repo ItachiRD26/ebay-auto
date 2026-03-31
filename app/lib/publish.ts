@@ -1,4 +1,4 @@
-import { db, COLLECTIONS, queueCol } from "@/lib/firebase";
+import { db, COLLECTIONS, queueCol, settingsDoc } from "@/lib/firebase";
 import { getCategoryIdForTitle } from "@/lib/ebay";
 
 interface VariationSpec { specifics: Record<string, string>; refPrice: number; }
@@ -101,6 +101,7 @@ async function addFixedPriceItem(product: {
   title: string; description: string; categoryId: string; price: number;
   stock: number; images: string[]; condition: string; aspects: Record<string, string[]>;
   variations?: VariationsData | null; markupRatio?: number;
+  fulfillmentPolicyId?: string; paymentPolicyId?: string; returnPolicyId?: string;
 }, userToken: string): Promise<{ itemId: string }> {
   const isChinese = (v: string) => /[\u4e00-\u9fff]/.test(v);
   const aspects = { ...product.aspects };
@@ -219,9 +220,9 @@ async function addFixedPriceItem(product: {
     ${specificsXml ? `<ItemSpecifics>${specificsXml}</ItemSpecifics>` : ""}
     ${variationsXml}
     <SellerProfiles>
-      <SellerShippingProfile><ShippingProfileID>${process.env.EBAY_FULFILLMENT_POLICY_ID}</ShippingProfileID></SellerShippingProfile>
-      <SellerReturnProfile><ReturnProfileID>${process.env.EBAY_RETURN_POLICY_ID}</ReturnProfileID></SellerReturnProfile>
-      <SellerPaymentProfile><PaymentProfileID>${process.env.EBAY_PAYMENT_POLICY_ID}</PaymentProfileID></SellerPaymentProfile>
+      <SellerShippingProfile><ShippingProfileID>${product.fulfillmentPolicyId ?? process.env.EBAY_FULFILLMENT_POLICY_ID}</ShippingProfileID></SellerShippingProfile>
+      <SellerReturnProfile><ReturnProfileID>${product.returnPolicyId ?? process.env.EBAY_RETURN_POLICY_ID}</ReturnProfileID></SellerReturnProfile>
+      <SellerPaymentProfile><PaymentProfileID>${product.paymentPolicyId ?? process.env.EBAY_PAYMENT_POLICY_ID}</PaymentProfileID></SellerPaymentProfile>
     </SellerProfiles>
     <Site>US</Site>
   </Item>
@@ -255,6 +256,31 @@ async function addFixedPriceItem(product: {
   return { itemId: itemMatch[1] };
 }
 
+
+// ─── Get eBay policies for a store (Firestore first, fallback to .env) ────────
+async function getStorePolicies(userId: string, storeId: string): Promise<{
+  fulfillmentPolicyId: string;
+  paymentPolicyId:     string;
+  returnPolicyId:      string;
+  merchantLocationKey: string;
+}> {
+  try {
+    const snap = await settingsDoc(userId, "main").get();
+    const data = snap.data() as Record<string, unknown> | undefined;
+    const policies = data?.policies as Record<string, Record<string, string>> | undefined;
+    const p = policies?.[storeId];
+    if (p?.fulfillmentPolicyId && p?.paymentPolicyId && p?.returnPolicyId && p?.merchantLocationKey) {
+      return p as { fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string; merchantLocationKey: string };
+    }
+  } catch {}
+  // Fallback to .env
+  return {
+    fulfillmentPolicyId: process.env.EBAY_FULFILLMENT_POLICY_ID ?? "",
+    paymentPolicyId:     process.env.EBAY_PAYMENT_POLICY_ID     ?? "",
+    returnPolicyId:      process.env.EBAY_RETURN_POLICY_ID       ?? "",
+    merchantLocationKey: process.env.EBAY_MERCHANT_LOCATION_KEY  ?? "",
+  };
+}
 
 // Local helper — fetches reference item data via Trading API GetItem
 async function getReferenceItemDataLocal(numericItemId: string, userToken: string): Promise<{ title: string; description: string; categoryId: string; aspects: Record<string, string[]>; imageUrls: string[]; condition: string; variations: null } | null> {
@@ -306,11 +332,13 @@ async function getReferenceItemDataLocal(numericItemId: string, userToken: strin
   } catch { return null; }
 }
 
-export async function publishProductById(productId: string, userToken: string, userId: string): Promise<{ listingId: string }> {
+export async function publishProductById(productId: string, userToken: string, userId: string, storeId?: string): Promise<{ listingId: string }> {
   const docRef = queueCol(userId).doc(productId);
   const doc = await docRef.get();
   if (!doc.exists) throw new Error("Product not found");
   const product = doc.data()!;
+  const sid = storeId ?? (product.storeId as string) ?? "";
+  const policies = await getStorePolicies(userId, sid);
 
   const now = new Date();
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -360,7 +388,7 @@ export async function publishProductById(productId: string, userToken: string, u
   const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters"];
 
   try {
-    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio }, userToken);
+    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio, fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
     itemId = result.itemId;
   } catch (firstErr: unknown) {
     const errMsg = String(firstErr instanceof Error ? firstErr.message : firstErr);
@@ -390,7 +418,7 @@ export async function publishProductById(productId: string, userToken: string, u
 
     console.log(`[publish] 🔄 Reintentando con correcciones...`);
     try {
-      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio }, userToken);
+      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio, fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
       itemId = result2.itemId;
       console.log(`[publish] ✅ Publicado tras corrección automática — ID: ${itemId}`);
     } catch (retryErr: unknown) {
@@ -403,7 +431,7 @@ export async function publishProductById(productId: string, userToken: string, u
         if (altRef.categoryId) publishCatId = altRef.categoryId;
         if (altRef.aspects && Object.keys(altRef.aspects).length > 0) publishAspects = { ...publishAspects, ...altRef.aspects };
         try {
-          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio }, userToken);
+          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio, fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
           itemId = result3.itemId;
           console.log(`[publish] ✅ Publicado con referencia alternativa — ID: ${itemId}`);
         } catch (altErr: unknown) {
@@ -412,7 +440,7 @@ export async function publishProductById(productId: string, userToken: string, u
             publishCatId = getLeafCategoryByTitle(publishTitle);
             publishAspects = { Brand: ["Unbranded"], MPN: ["Does Not Apply"] };
             console.log(`[publish] 🔧 Último recurso: cat=${publishCatId} para "${publishTitle.slice(0,40)}"`);
-            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio }, userToken);
+            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio, fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
             itemId = result4.itemId;
             console.log(`[publish] ✅ Publicado con fallback máximo — ID: ${itemId}`);
           } else throw altErr;

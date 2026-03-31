@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAppToken } from "@/lib/ebay";
-import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS, COLLECTIONS } from "@/lib/firebase";
+import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS, COLLECTIONS } from "@/lib/firebase"; // DEFAULT_SETTINGS includes minSold30d
 import { QueueProduct, Settings } from "@/types";
 
 const EXCLUDED_KEYWORDS = [
@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
     const settings = {
       ...DEFAULT_SETTINGS,
       ...(settingsSnap.exists ? settingsSnap.data() : {}),
-    } as Settings;
+    } as unknown as Settings;
 
     const {
       minPrice         = 20,

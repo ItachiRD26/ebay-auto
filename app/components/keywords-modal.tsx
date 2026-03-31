@@ -46,8 +46,27 @@ export default function KeywordsModal({ onClose }: Props) {
   };
 
   const handleAdd = () => {
-    const newKws = addInput.split(",").map(k => k.trim().toLowerCase()).filter(Boolean);
+    const raw = addInput.trim();
+    if (!raw) return;
+
+    let newKws: string[];
+
+    // If contains explicit separators (comma, newline, tab, semicolon) — split on those
+    if (/[,\n\t;]/.test(raw)) {
+      newKws = raw.split(/[,\n\t;]+/).map(k => k.trim().toLowerCase()).filter(Boolean);
+    } else if (raw.includes(" ")) {
+      // Space only — could be multi-word phrase or space-separated words
+      // Heuristic: if average word count per "token" > 1.5, treat whole thing as one phrase
+      // Otherwise split by space (user is pasting a list of single words)
+      const words = raw.split(/\s+/);
+      newKws = words.length <= 3 ? [raw.toLowerCase()] : words.map(k => k.toLowerCase());
+    } else {
+      newKws = [raw.toLowerCase()];
+    }
+
+    newKws = newKws.filter(Boolean);
     if (!newKws.length) return;
+
     const current = parseRaw(rawText);
     const unique  = newKws.filter(k => !current.includes(k));
     if (!unique.length) { setAddInput(""); return; }
@@ -132,7 +151,7 @@ export default function KeywordsModal({ onClose }: Props) {
             value={addInput}
             onChange={e => setAddInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && handleAdd()}
-            placeholder="Nueva keyword — separa varias con coma, Enter para agregar"
+            placeholder="Pega keywords — coma, espacio, salto de línea, cualquier formato"
             style={{ flex: 1, padding: "0.45rem 0.75rem", background: "var(--bg3)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.83rem", outline: "none" }}
           />
           <button

@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     const userToken = tokenDoc.data()!.access_token;
 
     try {
-      const { listingId } = await publishProductById(productId, userToken, userId);
+      const { listingId } = await publishProductById(productId, userToken, userId, storeId);
       return NextResponse.json({ success: true, listingId });
     } catch (publishError: unknown) {
       const reason = publishError instanceof Error ? publishError.message : String(publishError);

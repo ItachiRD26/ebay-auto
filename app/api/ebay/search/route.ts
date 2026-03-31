@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchProducts, getUserToken } from "@/lib/ebay";
-import { queueCol } from "@/lib/firebase";
 import { QueueProduct } from "@/types";
 import { resetProgress, updateProgress, endProgress } from "@/lib/search-progress";
 
@@ -19,10 +18,18 @@ const CONFIG = {
 
 // ─── Keywords — loaded dynamically from Firestore, fallback to defaults ─────────
 import { DEFAULT_AUTO_KEYWORDS, DEFAULT_EXCLUDED_KEYWORDS } from "@/api/ebay/keywords/route";
-import { settingsDoc } from "@/lib/firebase";
+import { queueCol, settingsDoc } from "@/lib/firebase";
 
 // 60-second in-memory cache so we don't hit Firestore on every item
 let _kwCache: { auto: string[]; excluded: string[]; fetchedAt: number } | null = null;
+
+async function getUserSettings(userId: string): Promise<{ minSoldCount: number; minSold30d: number }> {
+  try {
+    const snap = await settingsDoc(userId, "main").get();
+    const data = snap.data() as Record<string, number> | undefined;
+    return { minSoldCount: data?.minSoldCount ?? 5, minSold30d: data?.minSold30d ?? 3 };
+  } catch { return { minSoldCount: 5, minSold30d: 3 }; }
+}
 
 async function getKeywords(userId: string): Promise<{ auto: string[]; excluded: string[] }> {
   if (_kwCache && Date.now() - _kwCache.fetchedAt < 60_000) return _kwCache;
@@ -240,6 +247,8 @@ async function processItem(
   storeId: string,
   userId: string,
   excluded: string[],
+  minSoldTotal: number,
+  minSold30d: number,
 ): Promise<string | false> {
   const title      = (item.title as string) ?? "";
   const itemId     = item.itemId as string;
@@ -293,13 +302,13 @@ async function processItem(
   console.log(`      Precio: $${pricing.ebayRefPrice} + $${pricing.ebayShippingCost} envio = $${pricing.totalMarketCost} mercado`);
   console.log(`      Ventas: ${td.soldCount} total | ~${td.estimatedSold30d} est/30d | listing: ${ageLabel} | ID:${numericId}`);
 
-  if (td.soldCount < CONFIG.MIN_SOLD_TOTAL) {
-    console.log(`      ❌ ${td.soldCount} ventas totales < min ${CONFIG.MIN_SOLD_TOTAL}`);
+  if (td.soldCount < minSoldTotal) {
+    console.log(`      ❌ ${td.soldCount} ventas totales < min ${minSoldTotal}`);
     return false;
   }
 
-  if (td.estimatedSold30d < CONFIG.MIN_SOLD_30D) {
-    console.log(`      ❌ ~${td.estimatedSold30d} est/30d < min ${CONFIG.MIN_SOLD_30D} — producto lento`);
+  if (td.estimatedSold30d < minSold30d) {
+    console.log(`      ❌ ~${td.estimatedSold30d} est/30d < min ${minSold30d} — producto lento`);
     return false;
   }
 
@@ -378,7 +387,8 @@ export async function POST(req: NextRequest) {
     if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
 
     let totalAdded = 0;
-    const kws = await getKeywords(userId);
+    const kws          = await getKeywords(userId);
+    const userSettings = await getUserSettings(userId);
 
     // Single keyword search (frontend loops for auto-search)
     const kw = keywords || "";
@@ -405,7 +415,7 @@ export async function POST(req: NextRequest) {
 
     for (const item of items) {
       totalReviewed++;
-      const productId = await processItem(item, kw, storeId, userId, kws.excluded);
+      const productId = await processItem(item, kw, storeId, userId, kws.excluded, userSettings.minSoldCount, userSettings.minSold30d);
       if (productId) {
         totalAdded++;
       } else {
