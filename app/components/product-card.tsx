@@ -80,9 +80,9 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             ))}
           </div>
         )}
-        <div className="img-count">{images.length} fotos</div>
+        <div className="img-count">{images.length} photos</div>
         <div className={`status-badge status-${product.status}`}>
-          {product.status === "pending" ? "⏳ Pendiente" : product.status === "approved" ? "✅ Aprobado" : product.status === "published" ? "🚀 Publicado" : "❌ Rechazado"}
+          {product.status === "pending" ? "⏳ Pendiente" : product.status === "approved" ? "✅ Aprobado" : product.status === "published" ? "🚀 Publicado" : "❌ Rejected"}
         </div>
       </div>
 
@@ -91,10 +91,10 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         <h3 className="title">{product.title}</h3>
 
         <div className="meta-row">
-          {(product.soldCount ?? 0) > 0 && <span className="meta-item">📦 {product.soldCount.toLocaleString()} vendidos</span>}
+          {(product.soldCount ?? 0) > 0 && <span className="meta-item">📦 {product.soldCount.toLocaleString()} sold</span>}
           {product.status === "published" && product.listingId
             ? <a href={`https://www.ebay.com/itm/${product.listingId}`} target="_blank" rel="noreferrer" className="source-link">🛒 Ver mi listing ↗</a>
-            : <a href={product.sourceUrl} target="_blank" rel="noreferrer" className="source-link">Ver referencia ↗</a>
+            : <a href={product.sourceUrl} target="_blank" rel="noreferrer" className="source-link">View reference ↗</a>
           }
         </div>
 
@@ -276,7 +276,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
               )}
               {!editing && (
                 <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
-                  {publishing ? "Reintentando..." : "🔄 Reintentar sin editar"}
+                  {publishing ? "Reintentando..." : "🔄 Retry without editing"}
                 </button>
               )}
             </div>

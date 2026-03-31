@@ -55,10 +55,63 @@ async function findAlternativeReference(title: string, originalItemId: string, u
 
 async function autoFixWithClaude(errorMsg: string, product: { title: string; description: string; categoryId: string; aspects: Record<string, string[]> }): Promise<{ title?: string; description?: string; categoryId?: string; aspects?: Record<string, string[]> } | null> {
   try {
-    const isImproper = errorMsg.toLowerCase().includes("improper") || errorMsg.toLowerCase().includes("policy");
-    const prompt = isImproper
-      ? `Write a fresh eBay product description for: "${product.title}". 2-3 sentences, professional tone, highlight features and benefits only. No brand names, no Chinese text, no medical claims, no sexual content. Return ONLY JSON: {"title":"${product.title.replace(/[^\w\s]/g,"").slice(0,75)}","description":"your clean 2-3 sentence description here"}`
-      : `You are an eBay listing fixer. Error: "${errorMsg}". Title: ${product.title}. CategoryId: ${product.categoryId}. Aspects: ${JSON.stringify(product.aspects).slice(0,300)}. Fix only what the error requires. Return ONLY valid JSON with changed fields. "Model is missing"->{"aspects":{"Model":["Compatible"]}}. "item specific X missing"->{"aspects":{"X":["value"]}}. "too long" or "characters"->truncate the offending aspect value to under 65 chars in aspects JSON. Return the text null if unfixable.`;
+    const err = errorMsg.toLowerCase();
+    const isImproper  = err.includes("improper") || err.includes("policy") || err.includes("violation");
+    const isMissing   = err.includes("missing") || err.includes("item specific");
+    const isTooLong   = err.includes("too long") || err.includes("characters");
+
+    let prompt: string;
+
+    if (isImproper) {
+      // Fully rewrite title and description to be eBay-safe
+      const cleanTitle = product.title.replace(/[^\w\s,\-()]/g, "").slice(0, 75).trim();
+      prompt = `You are an eBay listing writer. Rewrite this product for eBay compliance.
+Product: "${product.title}"
+Rules: professional tone, highlight features and benefits only, no brand names, no Chinese text, no medical/health claims, no adult content, no weapons, no misleading terms.
+Return ONLY this JSON (no markdown):
+{"title":"${cleanTitle}","description":"2-3 sentence professional product description here"}`;
+    } else if (isMissing) {
+      // Extract the specific missing field from the error message
+      const styleMatch    = errorMsg.match(/Style/i);
+      const deptMatch     = errorMsg.match(/Department/i);
+      const modelMatch    = errorMsg.match(/Model/i);
+      const missingFields = errorMsg.match(/item specific ([A-Za-z ]+) is missing/gi) ?? [];
+      const fields = missingFields.map(m => m.replace(/item specific /i, "").replace(/ is missing/i, "").trim());
+      if (styleMatch && !fields.includes("Style")) fields.push("Style");
+      if (deptMatch  && !fields.includes("Department")) fields.push("Department");
+      if (modelMatch && !fields.includes("Model")) fields.push("Model");
+
+      const t = product.title.toLowerCase();
+      // Pre-compute smart defaults based on title
+      const smartDefaults: Record<string, string> = {
+        Style: t.includes("vintage") ? "Vintage" : t.includes("modern") ? "Modern" : t.includes("retro") ? "Retro" : t.includes("classic") ? "Classic" : t.includes("sport") ? "Sport" : "Casual",
+        Department: t.includes("men") || t.includes("male") || t.includes("boy") ? "Men" : t.includes("women") || t.includes("female") || t.includes("girl") || t.includes("lady") ? "Women" : t.includes("kid") || t.includes("child") || t.includes("baby") ? "Kids" : "Unisex Adults",
+        Model: "Compatible",
+        "Occasion": t.includes("sport") || t.includes("gym") || t.includes("bike") || t.includes("cycling") ? "Sport" : t.includes("office") || t.includes("work") ? "Work" : "Casual",
+        "Sleeve Length": t.includes("short sleeve") ? "Short Sleeve" : t.includes("long sleeve") || t.includes("long-sleeve") ? "Long Sleeve" : t.includes("sleeveless") ? "Sleeveless" : "Long Sleeve",
+      };
+
+      const aspectsToAdd: Record<string, string[]> = {};
+      for (const field of fields) {
+        aspectsToAdd[field] = [smartDefaults[field] ?? "Other"];
+      }
+
+      prompt = `You are an eBay listing fixer. The listing is missing required item specifics.
+Product title: "${product.title}"
+Missing fields: ${fields.join(", ")}
+Current aspects: ${JSON.stringify(product.aspects).slice(0, 200)}
+Pre-computed defaults: ${JSON.stringify(smartDefaults)}
+
+Return ONLY this JSON with appropriate values for the missing fields (use the pre-computed defaults as guidance, improve if you can based on the title):
+{"aspects": ${JSON.stringify(aspectsToAdd)}}`;
+    } else if (isTooLong) {
+      prompt = `Fix this eBay listing error: "${errorMsg}".
+Aspects: ${JSON.stringify(product.aspects).slice(0, 300)}.
+Truncate any aspect value that exceeds 65 characters.
+Return ONLY valid JSON: {"aspects": {"field": ["truncated value"]}}`;
+    } else {
+      prompt = `You are an eBay listing fixer. Error: "${errorMsg}". Title: ${product.title}. Aspects: ${JSON.stringify(product.aspects).slice(0,200)}. Fix only what the error requires. Return ONLY valid JSON with changed fields, or the text null if unfixable.`;
+    }
     const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 400, messages: [{ role: "user", content: prompt }] }) });
     if (!res.ok) return null;
     const data = await res.json() as { content: { type: string; text: string }[] };
@@ -306,7 +359,12 @@ export async function publishProductById(productId: string, userToken: string, u
   if (currentCount >= MONTHLY_LIMIT) throw new Error(`Límite mensual alcanzado (${currentCount}/${MONTHLY_LIMIT} listings este mes)`);
 
   const sid = storeId ?? (product.storeId as string) ?? "";
-  const policies = await getStorePolicies(userId, sid);
+  const [policies, userSettingsSnap] = await Promise.all([
+    getStorePolicies(userId, sid),
+    settingsDoc(userId, "main").get(),
+  ]);
+  const userSettings = userSettingsSnap.data() as Record<string, unknown> | undefined;
+  const MAX_VARIATIONS = (userSettings?.maxVariations as number) ?? 12;
 
   if (product.failReason) await docRef.update({ failReason: null, status: "approved" });
 
@@ -329,7 +387,6 @@ export async function publishProductById(productId: string, userToken: string, u
       refData.imageUrls.forEach((u: string) => { if (!merged.includes(u)) merged.push(u); });
       refImages = merged.slice(0, 12);
       refVariations = (refData as unknown as ReferenceItemData).variations ?? null;
-      const MAX_VARIATIONS = 12;
       if (refVariations && refVariations.variations.length > MAX_VARIATIONS) throw new Error(`Demasiadas variantes (${refVariations.variations.length}/${MAX_VARIATIONS} máx) — se omite para no agotar saldo`);
       const varInfo = refVariations ? ` | ${refVariations.variations.length} variantes (${Object.keys(refVariations.specificsSet).join(", ")})` : " | sin variantes";
       console.log(`[publish] ${productId} — ${Object.keys(refAspects).length} aspects, ${refImages.length} images${varInfo}`);
@@ -345,7 +402,7 @@ export async function publishProductById(productId: string, userToken: string, u
   let publishCatId = refCategoryId || getLeafCategoryByTitle(product.title);
   let publishAspects = { ...refAspects };
 
-  const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters"];
+  const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters", "Style", "Department", "Occasion", "Sleeve"];
 
   try {
     const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
@@ -368,7 +425,13 @@ export async function publishProductById(productId: string, userToken: string, u
       if (!fix) { console.log("[publish] Claude no pudo corregir"); throw firstErr; }
       if (fix.title)       { publishTitle   = fix.title;       console.log(`[publish] 🔧 Título corregido: "${fix.title}"`); }
       if (fix.description) { publishDesc    = fix.description; console.log(`[publish] 🔧 Descripción corregida`); }
-      if (fix.aspects)     { publishAspects = { ...publishAspects, ...fix.aspects }; console.log(`[publish] 🔧 Aspects corregidos:`, fix.aspects); }
+      if (fix.aspects) {
+        // Deep merge: for each key, combine existing + new values, dedupe
+        for (const [k, v] of Object.entries(fix.aspects)) {
+          publishAspects[k] = [...new Set([...(publishAspects[k] ?? []), ...v])].slice(0, 5);
+        }
+        console.log(`[publish] 🔧 Aspects merged:`, fix.aspects);
+      }
     }
 
     if (errMsg.includes("improper") || errMsg.includes("policy")) {

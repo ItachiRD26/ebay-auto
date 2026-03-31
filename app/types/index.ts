@@ -79,6 +79,7 @@ export interface Settings {
   markupPercent: number;
   minSoldCount: number;       // minimum total sales
   minSold30d: number;         // minimum estimated sales last 30 days (editable)
+  maxVariations: number;      // max variations per product (default 12)
   minMarginPercent: number;
   defaultStock: number;
   ebayMarketplace: string;

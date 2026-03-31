@@ -8,7 +8,7 @@ import { useAuth } from "@/lib/auth-context";
 
 const DEFAULTS: Settings = {
   minPrice: 15, maxPrice: 150, markupPercent: 6, minSoldCount: 5,
-  minSold30d: 3, minMarginPercent: 30, defaultStock: 1,
+  minSold30d: 3, maxVariations: 12, minMarginPercent: 30, defaultStock: 1,
   ebayMarketplace: "EBAY_US", autoSearchEnabled: false,
   searchIntervalMinutes: 60, searchKeywords: [],
   onlyFreeShipping: false, onlyNewCondition: true,
@@ -136,6 +136,7 @@ export default function FiltersModal({ onClose }: Props) {
               <NumField label="Total sales" field="minSoldCount" prefix="#" desc="Historical minimum" />
               <NumField label="Sales / 30 days" field="minSold30d" prefix="#" desc="Estimated minimum/month" />
               <NumField label="Default stock" field="defaultStock" prefix="#" />
+              <NumField label="Max variations" field="maxVariations" prefix="#" desc="Products with more variations are skipped" />
             </div>
           </section>
 

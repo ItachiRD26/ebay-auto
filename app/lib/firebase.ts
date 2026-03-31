@@ -39,6 +39,7 @@ export const DEFAULT_SETTINGS = {
   markupPercent: 6,
   minSoldCount: 5,
   minSold30d: 3,
+  maxVariations: 12,
   minMarginPercent: 30,
   defaultStock: 1,
   ebayMarketplace: "EBAY_US",
