@@ -971,6 +971,15 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {/* Footer */}
+      <div style={{ textAlign: "center", padding: "0.6rem", borderTop: "1px solid var(--border)", fontSize: "0.72rem", color: "var(--text3)", flexShrink: 0 }}>
+        <a href="/privacy" target="_blank" rel="noopener noreferrer"
+          style={{ color: "var(--text3)", textDecoration: "none", marginRight: "0.6rem" }}>
+          Privacy Policy
+        </a>
+        · © 2026 DropFlow
+      </div>
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );

@@ -3,8 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Always allow login page and all API routes
-  if (pathname === "/login" || pathname.startsWith("/api/")) {
+  // Always allow login page, privacy policy, and all API routes
+  if (pathname === "/login" || pathname === "/privacy" || pathname.startsWith("/api/")) {
     return NextResponse.next();
   }
 

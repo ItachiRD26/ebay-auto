@@ -168,6 +168,17 @@ export default function LoginPage() {
         </form>
       </div>
 
+      {/* Privacy Policy link */}
+      <div style={{ position: "absolute", bottom: "1.5rem", left: 0, right: 0, textAlign: "center" }}>
+        <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.75rem", color: "#475569", textDecoration: "none" }}
+          onMouseEnter={e => (e.currentTarget.style.color = "#94a3b8")}
+          onMouseLeave={e => (e.currentTarget.style.color = "#475569")}>
+          Privacy Policy
+        </a>
+        <span style={{ color: "#334155", margin: "0 0.5rem" }}>·</span>
+        <span style={{ fontSize: "0.75rem", color: "#334155" }}>© 2026 DropFlow</span>
+      </div>
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
