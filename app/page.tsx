@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { db } from "@/lib/firebase-client";
-import { collection, query, where, orderBy, limit, onSnapshot, getDocs } from "firebase/firestore";
+import { collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs, QueryDocumentSnapshot, DocumentData } from "firebase/firestore";
 import { QueueProduct, Store } from "@/types";
 import { useAuth } from "@/lib/auth-context";
 import ProductCard from "@/components/product-card";
@@ -141,39 +141,71 @@ export default function Dashboard() {
     return () => window.removeEventListener("beforeunload", handleUnload);
   }, [user]);
 
-  // ── Single listener: all products for this user (no composite index needed) ────
-  // Filter by storeId and status in JS to avoid Firestore composite indexes
-  const [allProducts, setAllProducts] = useState<QueueProduct[]>([]);
-  const [stats, setStats]             = useState<Record<TabType, number>>({ pending: 0, approved: 0, published: 0, rejected: 0, failed: 0 });
+  // ── Products with pagination ──────────────────────────────────────────────────
+  const PAGE_SIZE = 50;
+  const [allProducts, setAllProducts]     = useState<QueueProduct[]>([]);
+  const [stats, setStats]                 = useState<Record<TabType, number>>({ pending: 0, approved: 0, published: 0, rejected: 0, failed: 0 });
+  const [lastDoc, setLastDoc]             = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [hasMore, setHasMore]             = useState(false);
+  const [loadingMore, setLoadingMore]     = useState(false);
 
+  // Reset pagination when tab/store changes
+  useEffect(() => {
+    setLastDoc(null);
+    setHasMore(false);
+    setAllProducts([]);
+  }, [user, selectedStoreId, activeTab]);
+
+  // Real-time listener for first page
   useEffect(() => {
     if (!user || !selectedStoreId) return;
     setLoading(true);
-    // Composite index required: storeId ASC + status ASC + createdAt DESC
-    // First time this runs, check browser console for the Firestore index creation link.
     const q = query(
       collection(db, "users", user.uid, "products_queue"),
       where("storeId", "==", selectedStoreId),
       where("status",  "==", activeTab),
       orderBy("createdAt", "desc"),
-      limit(50)
+      limit(PAGE_SIZE)
     );
     const unsub = onSnapshot(q,
       snap => {
-        setAllProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })) as QueueProduct[]);
+        const docs = snap.docs;
+        setAllProducts(docs.map(d => ({ id: d.id, ...d.data() })) as QueueProduct[]);
+        setLastDoc(docs[docs.length - 1] ?? null);
+        setHasMore(docs.length === PAGE_SIZE);
         setLoading(false);
       },
       err => {
-        // Firestore prints the index creation URL here — open browser console (F12)
-        console.error("[products] Firestore error — check console for index link:", err.message);
+        console.error("[products] Firestore error — check browser console for index link:", err.message);
         setLoading(false);
       }
     );
     return () => unsub();
   }, [user, selectedStoreId, activeTab]);
 
-  // Derive filtered products and stats in JS — zero extra Firestore queries
-  // allProducts = current tab results (already filtered by storeId + status + limit 50)
+  // Load more (cursor pagination — getDocs, not real-time)
+  const handleLoadMore = async () => {
+    if (!user || !selectedStoreId || !lastDoc || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const q = query(
+        collection(db, "users", user.uid, "products_queue"),
+        where("storeId", "==", selectedStoreId),
+        where("status",  "==", activeTab),
+        orderBy("createdAt", "desc"),
+        startAfter(lastDoc),
+        limit(PAGE_SIZE)
+      );
+      const snap = await getDocs(q);
+      const newDocs = snap.docs;
+      setAllProducts(prev => [...prev, ...newDocs.map(d => ({ id: d.id, ...d.data() })) as QueueProduct[]]);
+      setLastDoc(newDocs[newDocs.length - 1] ?? lastDoc);
+      setHasMore(newDocs.length === PAGE_SIZE);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const products = allProducts;
 
   // ── Stats listeners — one per status tab (each needs its own index) ─────────────
@@ -845,6 +877,21 @@ export default function Dashboard() {
                     onUpdate={updates => patch(p.id, updates)}
                   />
                 ))
+              )}
+
+              {/* Load more */}
+              {!loading && hasMore && (
+                <div style={{ gridColumn: "1/-1", display: "flex", justifyContent: "center", padding: "0.75rem 0" }}>
+                  <button
+                    onClick={handleLoadMore}
+                    disabled={loadingMore}
+                    style={{ padding: "0.55rem 2rem", background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text2)", fontSize: "0.85rem", fontWeight: 600, cursor: loadingMore ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: "0.5rem", opacity: loadingMore ? 0.6 : 1 }}
+                  >
+                    {loadingMore
+                      ? <><div style={{ width: 14, height: 14, border: "2px solid var(--border2)", borderTopColor: "var(--blue)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /> Cargando...</>
+                      : "↓ Ver más productos"}
+                  </button>
+                </div>
               )}
             </div>
           )}

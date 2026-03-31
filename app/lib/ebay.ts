@@ -39,9 +39,6 @@ export async function getAppToken(): Promise<string> {
 }
 
 // ─── User Token (OAuth — stored per store in Firestore) ───────────────────────
-// storeId corresponds to the document ID in the "tokens" collection.
-// Each connected eBay store has its own token document: tokens/{storeId}
-
 export async function getUserToken(storeId: string): Promise<string> {
   const doc = await db.collection("tokens").doc(storeId).get();
   if (!doc.exists) throw new Error(`Tienda "${storeId}" no conectada. Ve a Configuración → Mis Tiendas.`);
@@ -105,7 +102,6 @@ export async function searchProducts(keywords: string, limit = 200) {
       headers: {
         Authorization: `Bearer ${token}`,
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-        "X-EBAY-C-ENDUSERCTX": "affiliateCampaignId=<ePNCampaignId>,affiliateReferenceId=<referenceId>",
         "Content-Type": "application/json",
       },
       signal: AbortSignal.timeout(30000),
@@ -127,10 +123,7 @@ async function getLeafChildId(categoryId: string, token: string): Promise<string
   try {
     const res = await fetch(
       `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_subtree?category_id=${categoryId}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(8000),
-      }
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) }
     );
     if (!res.ok) return null;
     const data = await res.json() as { categorySubtreeNode?: { childCategoryTreeNodes?: unknown[] } };
@@ -141,15 +134,14 @@ async function getLeafChildId(categoryId: string, token: string): Promise<string
     let bestLevel = -1;
     const queue: unknown[] = [root];
     while (queue.length) {
-      const current = queue.shift() as { leafCategoryTreeNode?: boolean; categoryTreeNodeLevel?: number; category?: { categoryId?: string; categoryName?: string }; childCategoryTreeNodes?: unknown[] };
+      const current = queue.shift() as {
+        leafCategoryTreeNode?: boolean; categoryTreeNodeLevel?: number;
+        category?: { categoryId?: string }; childCategoryTreeNodes?: unknown[];
+      };
       const subChildren = current.childCategoryTreeNodes ?? [];
       const isLeaf = current.leafCategoryTreeNode === true || subChildren.length === 0;
       const level = current.categoryTreeNodeLevel ?? 0;
-
-      if (isLeaf && level >= bestLevel) {
-        bestLeaf  = current.category?.categoryId ?? null;
-        bestLevel = level;
-      }
+      if (isLeaf && level >= bestLevel) { bestLeaf = current.category?.categoryId ?? null; bestLevel = level; }
       if (!isLeaf) queue.push(...subChildren);
     }
     return bestLeaf;
@@ -159,76 +151,233 @@ async function getLeafChildId(categoryId: string, token: string): Promise<string
 export async function getCategoryIdForTitle(title: string): Promise<string | null> {
   const cacheKey = title.toLowerCase().slice(0, 40);
   if (_taxonomyCache.has(cacheKey)) return _taxonomyCache.get(cacheKey)!;
-
   try {
     const token = await getAppToken();
-    const params = new URLSearchParams({
-      q: title.split(" ").slice(0, 5).join(" "),
-      limit: "20",
-      filter: "conditions:{NEW},buyingOptions:{FIXED_PRICE}",
-    });
     const res = await fetch(
       `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions?q=${encodeURIComponent(title.slice(0, 80))}`,
-      {
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(8000),
-      }
+      { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, signal: AbortSignal.timeout(8000) }
     );
     if (!res.ok) return null;
     const data = await res.json() as {
-      categorySuggestions?: {
-        category: { categoryId: string; categoryName: string };
-        categoryTreeNodeLevel?: number;
-      }[];
+      categorySuggestions?: { category: { categoryId: string; categoryName: string }; categoryTreeNodeLevel?: number }[];
     };
-    const suggestions = (data.categorySuggestions ?? [])
-      .sort((a, b) => (b.categoryTreeNodeLevel ?? 0) - (a.categoryTreeNodeLevel ?? 0));
+    const suggestions = (data.categorySuggestions ?? []).sort((a, b) => (b.categoryTreeNodeLevel ?? 0) - (a.categoryTreeNodeLevel ?? 0));
     if (!suggestions.length) return null;
-
     const best = suggestions[0];
     const leafId = await getLeafChildId(best.category.categoryId, token);
     const finalId = leafId ?? best.category.categoryId;
     _taxonomyCache.set(cacheKey, finalId);
     return finalId;
-  } catch (e) {
-    console.warn("[taxonomy] Error:", e);
-    return null;
-  }
+  } catch (e) { console.warn("[taxonomy] Error:", e); return null; }
 }
 
-export async function getItemSalesFromInsights(
-  itemId: string,
-  title: string
-): Promise<{ soldCount: number } | null> {
+export async function getItemSalesFromInsights(itemId: string, title: string): Promise<{ soldCount: number } | null> {
   try {
     const token = await getAppToken();
-    const params = new URLSearchParams({
-      q: title.split(" ").slice(0, 5).join(" "),
-      limit: "20",
-      filter: "conditions:{NEW},buyingOptions:{FIXED_PRICE}",
+    const params = new URLSearchParams({ q: title.split(" ").slice(0, 5).join(" "), limit: "20", filter: "conditions:{NEW},buyingOptions:{FIXED_PRICE}" });
+    const res = await fetch(`https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search?${params}`, {
+      headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
+      signal: AbortSignal.timeout(10000),
     });
-    const res = await fetch(
-      `https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search?${params}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-        },
-        signal: AbortSignal.timeout(10000),
-      }
-    );
     if (!res.ok) return null;
-    const data = await res.json() as {
-      itemSales?: { itemId?: string; totalSoldItems?: number }[];
-    };
+    const data = await res.json() as { itemSales?: { itemId?: string; totalSoldItems?: number }[] };
     for (const item of data.itemSales ?? []) {
       const rawId = (item.itemId ?? "").split("|")[1] ?? item.itemId ?? "";
-      if (rawId === itemId) {
-        return { soldCount: item.totalSoldItems ?? 0 };
-      }
+      if (rawId === itemId) return { soldCount: item.totalSoldItems ?? 0 };
     }
     return null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
+}
+
+// ─── Trading API: Get full item details including variations ──────────────────
+// Used by publish to copy aspects + variation images from the reference listing.
+
+export interface VariationSpec {
+  specifics: Record<string, string>;
+  refPrice: number;
+}
+
+export interface VariationsData {
+  variations: VariationSpec[];
+  specificsSet: Record<string, string[]>;
+  picturesByVariant: Record<string, string[]>;
+  pictureDimension: string;
+}
+
+export interface ReferenceItemData {
+  title: string;
+  description: string;
+  categoryId: string;
+  aspects: Record<string, string[]>;
+  imageUrls: string[];
+  condition: string;
+  variations: VariationsData | null;
+}
+
+export async function getReferenceItemData(itemId: string, userToken: string): Promise<ReferenceItemData | null> {
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
+  <ItemID>${itemId}</ItemID>
+  <DetailLevel>ItemReturnDescription</DetailLevel>
+  <IncludeItemSpecifics>true</IncludeItemSpecifics>
+</GetItemRequest>`;
+
+  try {
+    const res = await fetch("https://api.ebay.com/ws/api.dll", {
+      method: "POST",
+      headers: {
+        "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "X-EBAY-API-CALL-NAME": "GetItem",
+        "Content-Type": "text/xml",
+      },
+      body: xml,
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (text.includes("<Ack>Failure</Ack>")) {
+      const m = text.match(/<LongMessage>(.*?)<\/LongMessage>/);
+      console.log(`[getReferenceItemData] eBay Failure: ${m?.[1] ?? "unknown"}`);
+      return null;
+    }
+
+    const titleMatch = text.match(/<Title>([\s\S]*?)<\/Title>/);
+    const descMatch  = text.match(/<Description>([\s\S]*?)<\/Description>/);
+    const catMatch   = text.match(/<PrimaryCategory>[\s\S]*?<CategoryID>(\d+)<\/CategoryID>/);
+    const condMatch  = text.match(/<ConditionDisplayName>(.*?)<\/ConditionDisplayName>/);
+
+    const imageUrls: string[] = [];
+    const imgRegex = /<PictureURL>(https?:\/\/[^<]+)<\/PictureURL>/g;
+    let imgMatch;
+    while ((imgMatch = imgRegex.exec(text)) !== null) {
+      if (!imageUrls.includes(imgMatch[1])) imageUrls.push(imgMatch[1]);
+    }
+
+    const aspects: Record<string, string[]> = {};
+    const nvRegex = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+    let nvMatch;
+    while ((nvMatch = nvRegex.exec(text)) !== null) {
+      const block = nvMatch[1];
+      const nameM  = block.match(/<Name>(.*?)<\/Name>/);
+      const valueM = block.match(/<Value>(.*?)<\/Value>/);
+      if (nameM && valueM) {
+        const name = nameM[1].trim(); const value = valueM[1].trim();
+        if (name && value && value !== "Does not apply") {
+          if (!aspects[name]) aspects[name] = [];
+          if (!aspects[name].includes(value)) aspects[name].push(value);
+        }
+      }
+    }
+
+    let variations: VariationsData | null = null;
+    if (text.includes("<Variations>")) {
+      const varSpecs: VariationSpec[] = [];
+      const varRegex = /<Variation>([\s\S]*?)<\/Variation>/g;
+      let varMatch;
+      while ((varMatch = varRegex.exec(text)) !== null) {
+        const block = varMatch[1];
+        const priceM = block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/);
+        const refPrice = priceM ? parseFloat(priceM[1]) : 0;
+        const specifics: Record<string, string> = {};
+        const specRegex = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+        let specMatch;
+        while ((specMatch = specRegex.exec(block)) !== null) {
+          const nameM = specMatch[1].match(/<Name>(.*?)<\/Name>/);
+          const valM  = specMatch[1].match(/<Value>(.*?)<\/Value>/);
+          if (nameM && valM) specifics[nameM[1].trim()] = valM[1].trim();
+        }
+        if (Object.keys(specifics).length > 0) varSpecs.push({ specifics, refPrice });
+      }
+
+      const specificsSet: Record<string, string[]> = {};
+      const setMatch = text.match(/<VariationSpecificsSet>([\s\S]*?)<\/VariationSpecificsSet>/);
+      if (setMatch) {
+        const setRegex = /<NameValueList>([\s\S]*?)<\/NameValueList>/g;
+        let setNvl;
+        while ((setNvl = setRegex.exec(setMatch[1])) !== null) {
+          const nameM = setNvl[1].match(/<Name>(.*?)<\/Name>/);
+          if (!nameM) continue;
+          const name = nameM[1].trim();
+          const vals: string[] = [];
+          const valRegex = /<Value>(.*?)<\/Value>/g;
+          let valM;
+          while ((valM = valRegex.exec(setNvl[1])) !== null) vals.push(valM[1].trim());
+          if (vals.length > 0) specificsSet[name] = vals;
+        }
+      }
+
+      const picturesByVariant: Record<string, string[]> = {};
+      let pictureDimension = "";
+      const picsMatch = text.match(/<Pictures>([\s\S]*?)<\/Pictures>/);
+      if (picsMatch) {
+        const dimMatch = picsMatch[1].match(/<VariationSpecificName>(.*?)<\/VariationSpecificName>/);
+        if (dimMatch) pictureDimension = dimMatch[1].trim();
+        const setPicRegex = /<VariationSpecificPictureSet>([\s\S]*?)<\/VariationSpecificPictureSet>/g;
+        let setPicMatch;
+        while ((setPicMatch = setPicRegex.exec(picsMatch[1])) !== null) {
+          const valM = setPicMatch[1].match(/<VariationSpecificValue>(.*?)<\/VariationSpecificValue>/);
+          if (!valM) continue;
+          const varValue = valM[1].trim();
+          const picUrls: string[] = [];
+          const picUrlRegex = /<PictureURL>(https?:\/\/[^<]+)<\/PictureURL>/g;
+          let picUrlMatch;
+          while ((picUrlMatch = picUrlRegex.exec(setPicMatch[1])) !== null) picUrls.push(picUrlMatch[1]);
+          if (picUrls.length > 0) picturesByVariant[varValue] = picUrls;
+        }
+      }
+
+      if (varSpecs.length > 0) {
+        variations = { variations: varSpecs, specificsSet, picturesByVariant, pictureDimension };
+        console.log(`[getReferenceItemData] ${varSpecs.length} variants, dim="${pictureDimension}", pics=${Object.keys(picturesByVariant).length}`);
+      }
+    }
+
+    return {
+      title:       titleMatch?.[1]?.trim() ?? "",
+      description: descMatch?.[1]?.trim() ?? "",
+      categoryId:  catMatch?.[1] ?? "",
+      aspects,
+      imageUrls,
+      condition:   condMatch?.[1]?.trim() ?? "New",
+      variations,
+    };
+  } catch { return null; }
+}
+
+// ─── Trading API: GetSuggestedCategories ─────────────────────────────────────
+export async function getTradingCategoryForTitle(title: string, userToken: string): Promise<string | null> {
+  try {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<GetSuggestedCategoriesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
+  <Query>${title.slice(0, 80).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</Query>
+</GetSuggestedCategoriesRequest>`;
+
+    const res = await fetch("https://api.ebay.com/ws/api.dll", {
+      method: "POST",
+      headers: {
+        "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "X-EBAY-API-CALL-NAME": "GetSuggestedCategories",
+        "Content-Type": "text/xml",
+      },
+      body: xml,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (text.includes("<Ack>Failure</Ack>")) return null;
+
+    const blocks = [...text.matchAll(/<SuggestedCategory>([\s\S]*?)<\/SuggestedCategory>/g)];
+    let bestId = ""; let bestPct = 0;
+    for (const block of blocks) {
+      const idM  = block[1].match(/<CategoryID>(\d+)<\/CategoryID>/);
+      const pctM = block[1].match(/<PercentItemFound>(\d+)<\/PercentItemFound>/);
+      const pct  = pctM ? parseInt(pctM[1]) : 0;
+      if (idM && pct > bestPct) { bestPct = pct; bestId = idM[1]; }
+    }
+    return bestId || null;
+  } catch { return null; }
 }

@@ -1,5 +1,5 @@
 import { db, COLLECTIONS, queueCol, settingsDoc } from "@/lib/firebase";
-import { getCategoryIdForTitle } from "@/lib/ebay";
+import { getReferenceItemData, getCategoryIdForTitle, getTradingCategoryForTitle } from "@/lib/ebay";
 
 interface VariationSpec { specifics: Record<string, string>; refPrice: number; }
 interface VariationsData { variations: VariationSpec[]; specificsSet: Record<string, string[]>; picturesByVariant: Record<string, string[]>; pictureDimension: string; }
@@ -43,7 +43,8 @@ async function findAlternativeReference(title: string, originalItemId: string, u
       const numericId = rawId.split("|")[1] ?? rawId;
       if (numericId === originalItemId) continue;
       if (numericId.startsWith(originalItemId.slice(0, 6))) continue;
-      const refData = await getReferenceItemDataLocal(numericId, userToken);
+      const { getReferenceItemData } = await import("@/lib/ebay");
+      const refData = await getReferenceItemData(numericId, userToken);
       if (!refData) continue;
       console.log(`[publish] 🔍 Alt ref: ${numericId} — ${Object.keys(refData.aspects).length} aspects`);
       return { itemId: numericId, categoryId: refData.categoryId, aspects: refData.aspects, images: refData.imageUrls };
@@ -256,89 +257,34 @@ async function addFixedPriceItem(product: {
   return { itemId: itemMatch[1] };
 }
 
-
 // ─── Get eBay policies for a store (Firestore first, fallback to .env) ────────
 async function getStorePolicies(userId: string, storeId: string): Promise<{
   fulfillmentPolicyId: string;
   paymentPolicyId:     string;
   returnPolicyId:      string;
-  merchantLocationKey: string;
 }> {
   try {
     const snap = await settingsDoc(userId, "main").get();
     const data = snap.data() as Record<string, unknown> | undefined;
     const policies = data?.policies as Record<string, Record<string, string>> | undefined;
     const p = policies?.[storeId];
-    if (p?.fulfillmentPolicyId && p?.paymentPolicyId && p?.returnPolicyId && p?.merchantLocationKey) {
-      return p as { fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string; merchantLocationKey: string };
+    if (p?.fulfillmentPolicyId && p?.paymentPolicyId && p?.returnPolicyId) {
+      return { fulfillmentPolicyId: p.fulfillmentPolicyId, paymentPolicyId: p.paymentPolicyId, returnPolicyId: p.returnPolicyId };
     }
   } catch {}
-  // Fallback to .env
   return {
     fulfillmentPolicyId: process.env.EBAY_FULFILLMENT_POLICY_ID ?? "",
     paymentPolicyId:     process.env.EBAY_PAYMENT_POLICY_ID     ?? "",
     returnPolicyId:      process.env.EBAY_RETURN_POLICY_ID       ?? "",
-    merchantLocationKey: process.env.EBAY_MERCHANT_LOCATION_KEY  ?? "",
   };
 }
 
-// Local helper — fetches reference item data via Trading API GetItem
-async function getReferenceItemDataLocal(numericItemId: string, userToken: string): Promise<{ title: string; description: string; categoryId: string; aspects: Record<string, string[]>; imageUrls: string[]; condition: string; variations: null } | null> {
-  try {
-    const xml = `<?xml version="1.0" encoding="utf-8"?>
-<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
-  <ItemID>${numericItemId}</ItemID>
-  <DetailLevel>ItemReturnDescription</DetailLevel>
-  <IncludeItemSpecifics>true</IncludeItemSpecifics>
-</GetItemRequest>`;
-    const res = await fetch("https://api.ebay.com/ws/api.dll", {
-      method: "POST",
-      headers: { "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "967", "X-EBAY-API-CALL-NAME": "GetItem", "Content-Type": "text/xml" },
-      body: xml, signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const text = await res.text();
-    if (text.includes("<Ack>Failure</Ack>")) return null;
-
-    const catMatch   = text.match(/<CategoryID>(\d+)<\/CategoryID>/);
-    const titleMatch = text.match(/<Title>(.*?)<\/Title>/);
-    const descMatch  = text.match(/<Description><!\[CDATA\[([\s\S]*?)\]\]><\/Description>/);
-    const condMatch  = text.match(/<ConditionDisplayName>(.*?)<\/ConditionDisplayName>/);
-
-    // Extract item specifics as aspects
-    const aspects: Record<string, string[]> = {};
-    const specificMatches = text.matchAll(/<NameValueList>\s*<Name>(.*?)<\/Name>\s*<Value>(.*?)<\/Value>/g);
-    for (const m of specificMatches) {
-      const key = m[1].trim();
-      if (!aspects[key]) aspects[key] = [];
-      aspects[key].push(m[2].trim());
-    }
-
-    // Extract picture URLs
-    const imageUrls: string[] = [];
-    const picMatches = text.matchAll(/<PictureURL>(.*?)<\/PictureURL>/g);
-    for (const m of picMatches) imageUrls.push(m[1].trim());
-
-    return {
-      title: titleMatch?.[1] ?? "",
-      description: descMatch?.[1] ?? "",
-      categoryId: catMatch?.[1] ?? "",
-      aspects,
-      imageUrls,
-      condition: condMatch?.[1] ?? "New",
-      variations: null,
-    };
-  } catch { return null; }
-}
 
 export async function publishProductById(productId: string, userToken: string, userId: string, storeId?: string): Promise<{ listingId: string }> {
   const docRef = queueCol(userId).doc(productId);
   const doc = await docRef.get();
   if (!doc.exists) throw new Error("Product not found");
   const product = doc.data()!;
-  const sid = storeId ?? (product.storeId as string) ?? "";
-  const policies = await getStorePolicies(userId, sid);
 
   const now = new Date();
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -347,6 +293,9 @@ export async function publishProductById(productId: string, userToken: string, u
   const currentCount = counterDoc.exists ? (counterDoc.data()!.count as number) : 0;
   const MONTHLY_LIMIT = 245;
   if (currentCount >= MONTHLY_LIMIT) throw new Error(`Límite mensual alcanzado (${currentCount}/${MONTHLY_LIMIT} listings este mes)`);
+
+  const sid = storeId ?? (product.storeId as string) ?? "";
+  const policies = await getStorePolicies(userId, sid);
 
   if (product.failReason) await docRef.update({ failReason: null, status: "approved" });
 
@@ -360,7 +309,7 @@ export async function publishProductById(productId: string, userToken: string, u
     const parts = rawId.split("|");
     const numericItemId = parts.length >= 2 ? parts[1] : rawId;
     console.log(`[publish] GetItem ref → rawId="${rawId}" numericId="${numericItemId}"`);
-    const refData = await getReferenceItemDataLocal(numericItemId, userToken);
+    const refData = await getReferenceItemData(numericItemId, userToken);
     console.log(`[publish] refData=${refData ? "OK" : "NULL"}`);
     if (refData) {
       refAspects = refData.aspects;
@@ -388,7 +337,7 @@ export async function publishProductById(productId: string, userToken: string, u
   const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters"];
 
   try {
-    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio, fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
+    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
     itemId = result.itemId;
   } catch (firstErr: unknown) {
     const errMsg = String(firstErr instanceof Error ? firstErr.message : firstErr);
@@ -418,7 +367,7 @@ export async function publishProductById(productId: string, userToken: string, u
 
     console.log(`[publish] 🔄 Reintentando con correcciones...`);
     try {
-      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio, fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
+      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
       itemId = result2.itemId;
       console.log(`[publish] ✅ Publicado tras corrección automática — ID: ${itemId}`);
     } catch (retryErr: unknown) {
@@ -431,7 +380,7 @@ export async function publishProductById(productId: string, userToken: string, u
         if (altRef.categoryId) publishCatId = altRef.categoryId;
         if (altRef.aspects && Object.keys(altRef.aspects).length > 0) publishAspects = { ...publishAspects, ...altRef.aspects };
         try {
-          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio, fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
+          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
           itemId = result3.itemId;
           console.log(`[publish] ✅ Publicado con referencia alternativa — ID: ${itemId}`);
         } catch (altErr: unknown) {
@@ -440,7 +389,7 @@ export async function publishProductById(productId: string, userToken: string, u
             publishCatId = getLeafCategoryByTitle(publishTitle);
             publishAspects = { Brand: ["Unbranded"], MPN: ["Does Not Apply"] };
             console.log(`[publish] 🔧 Último recurso: cat=${publishCatId} para "${publishTitle.slice(0,40)}"`);
-            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio, fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
+            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
             itemId = result4.itemId;
             console.log(`[publish] ✅ Publicado con fallback máximo — ID: ${itemId}`);
           } else throw altErr;
