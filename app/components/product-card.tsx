@@ -37,7 +37,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   };
 
   const handleDelist = async () => {
-    if (!confirm("¿Deslistar este producto de eBay?")) return;
+    if (!confirm("Delist this product from eBay?")) return;
     setDelisting(true);
     try {
       const res = await fetch("/api/ebay/delist", {
@@ -46,7 +46,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         body: JSON.stringify({ productId: product.id, listingId: product.listingId, storeId: product.storeId, userId: product.userId }),
       });
       const data = await res.json();
-      if (data.error) { alert("Error al deslistar: " + data.error); } else { alert("✅ Producto deslistado de eBay"); }
+      if (data.error) { alert("Error delisting: " + data.error); } else { alert("✅ Product delisted from eBay"); }
     } finally {
       setDelisting(false);
     }
@@ -145,7 +145,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         {editing && (
           <div className="desc-wrap">
             <label className="field-label">Descripción</label>
-            <textarea className="desc-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Descripción corta del producto..." rows={3} />
+            <textarea className="desc-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short product description..." rows={3} />
             <div style={{ marginTop: "0.5rem" }}>
               <label className="field-label">Stock</label>
               <input className="stock-input" type="number" value={stock} onChange={(e) => setStock(e.target.value)} min="1" />
@@ -156,7 +156,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         <div>
           {product.status === "pending" && (
             <div className={`actions-pending ${editing ? "actions-pending" : ""}`} style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto 1fr 1fr" : "1fr 1fr" }}>
-              <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ gridColumn: editing ? "1" : "1" }}>{editing ? "✕" : "✏ Editar"}</button>
+              <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ gridColumn: editing ? "1" : "1" }}>{editing ? "✕" : "✏ Edit"}</button>
               {editing && <button className="btn btn-save" onClick={handleSave}>💾</button>}
               <button className="btn btn-reject" onClick={onReject}>✕ Rechazar</button>
               <button className="btn btn-approve" onClick={() => { handleSave(); onApprove(); }}>✓ Aprobar</button>
@@ -164,13 +164,13 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
           )}
           {product.status === "approved" && (
             <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto auto 1fr" : "auto auto 1fr" }}>
-              <button className="btn btn-icon btn-edit" onClick={() => setEditing(!editing)} title={editing ? "Cancelar edición" : "Editar"}>
+              <button className="btn btn-icon btn-edit" onClick={() => setEditing(!editing)} title={editing ? "Cancel editing" : "Edit"}>
                 {editing ? "✕" : "✏"}
               </button>
-              {editing && <button className="btn btn-icon btn-save" onClick={handleSave} title="Guardar cambios">💾</button>}
-              <button className="btn btn-icon btn-reject" onClick={onReject} title="Mover a rechazados">✕</button>
+              {editing && <button className="btn btn-icon btn-save" onClick={handleSave} title="Save changes">💾</button>}
+              <button className="btn btn-icon btn-reject" onClick={onReject} title="Move to rejected">✕</button>
               <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
-                {publishing ? "Publicando..." : "🚀 Publicar en eBay"}
+                {publishing ? "Publishing..." : "🚀 Publish to eBay"}
               </button>
             </div>
           )}
@@ -179,8 +179,8 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
               <span className="published-info" title={`ID: ${product.listingId}`}>
                 ✅ ID {product.listingId}{product.bidPercentage ? ` · 📢 ${product.bidPercentage}%` : ""}
               </span>
-              <button className="btn btn-delist" onClick={handleDelist} disabled={delisting} title="Deslistar de eBay" style={{ whiteSpace: "nowrap" }}>
-                {delisting ? "..." : "🗑 Deslistar"}
+              <button className="btn btn-delist" onClick={handleDelist} disabled={delisting} title="Delist from eBay" style={{ whiteSpace: "nowrap" }}>
+                {delisting ? "..." : "🗑 Delist"}
               </button>
             </div>
           )}
@@ -188,7 +188,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem" }}>
               <p className="fail-reason">⚠️ {product.failReason ?? "Error desconocido"}</p>
               <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ width: "100%" }}>
-                {editing ? "✕ Cerrar editor" : "✏ Editar y reintentar"}
+                {editing ? "✕ Close editor" : "✏ Edit & retry"}
               </button>
               {editing && (
                 <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem", padding:"0.75rem", background:"#080810", borderRadius:"8px", border:"1px solid #1e2235" }}>
@@ -198,7 +198,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                     style={{ width:"100%", fontSize:"0.8rem" }}
                     value={editTitle}
                     onChange={e => setEditTitle(e.target.value.slice(0, 80))}
-                    placeholder="Título del listing..."
+                    placeholder="Listing title..."
                   />
                   <div style={{ fontSize:"0.7rem", color: editTitle.length > 75 ? "#ef4444" : "#475569", textAlign:"right" }}>
                     {editTitle.length}/80
@@ -269,7 +269,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                   <div style={{ display:"flex", gap:"0.5rem", marginTop:"0.25rem" }}>
                     <button className="btn btn-save" onClick={handleSave} style={{ flex:1 }}>💾 Guardar cambios</button>
                     <button className="btn btn-publish" onClick={() => { handleSave(); handlePublish(); }} disabled={publishing} style={{ flex:1 }}>
-                      {publishing ? "Publicando..." : "🚀 Publicar ahora"}
+                      {publishing ? "Publishing..." : "🚀 Publish now"}
                     </button>
                   </div>
                 </div>

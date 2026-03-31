@@ -149,7 +149,7 @@ export default function StoreModal({ stores, userId, onClose, onStoresChange }: 
                   disabled={adding || !newName.trim()}
                   style={{ flex: 1, padding: "0.5rem", background: "var(--green)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
                 >
-                  {adding ? "Creando..." : "Crear tienda"}
+                  {adding ? "Creating..." : "Create store"}
                 </button>
                 <button
                   onClick={() => { setShowForm(false); setNewName(""); }}
@@ -175,10 +175,10 @@ export default function StoreModal({ stores, userId, onClose, onStoresChange }: 
               onClick={() => setShowForm(true)}
               style={{ width: "100%", padding: "0.55rem", background: "transparent", border: "1px dashed var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--blue)", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer" }}
             >
-              + Agregar tienda ({stores.length}/20)
+              + Agregar tienda ({stores.length}/5)
             </button>
           ) : !showForm ? (
-            <p style={{ textAlign: "center", fontSize: "0.8rem", color: "var(--text3)" }}>Máximo de 5 tiendas alcanzado</p>
+            <p style={{ textAlign: "center", fontSize: "0.8rem", color: "var(--text3)" }}>Maximum de 5 stores limit reached</p>
           ) : null}
         </div>
       </div>

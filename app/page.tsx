@@ -24,11 +24,11 @@ type RLGroup = {
 };
 
 const QUEUE_TABS: { key: TabType; label: string; color: string }[] = [
-  { key: "pending",   label: "Pendientes",  color: "var(--amber)"  },
-  { key: "approved",  label: "Aprobados",   color: "var(--green)"  },
-  { key: "published", label: "Publicados",  color: "var(--blue)"   },
-  { key: "rejected",  label: "Rechazados",  color: "var(--red)"    },
-  { key: "failed",    label: "Fallidos",    color: "var(--text2)"  },
+  { key: "pending",   label: "Pending",  color: "var(--amber)"  },
+  { key: "approved",  label: "Approved",   color: "var(--green)"  },
+  { key: "published", label: "Published",  color: "var(--blue)"   },
+  { key: "rejected",  label: "Rejected",  color: "var(--red)"    },
+  { key: "failed",    label: "Failed",    color: "var(--text2)"  },
 ];
 
 const CATEGORIES = [
@@ -262,7 +262,7 @@ export default function Dashboard() {
   const uid = user?.uid ?? "";
 
   const requireStore = (): boolean => {
-    if (!selectedStoreId) { toast("⚠ Selecciona una tienda primero", "err"); return false; }
+    if (!selectedStoreId) { toast("⚠ Select a store first", "err"); return false; }
     return true;
   };
 
@@ -366,13 +366,15 @@ export default function Dashboard() {
         if (user) { clearSearchState(user.uid); setSavedSearchState(null); }
         currentSearchRef.current = null;
       } else if (searchMode === "keyword") {
-        if (!kwInput.trim()) { toast("Escribe una keyword", "err"); return; }
+        if (!kwInput.trim()) { toast("Type a keyword first", "err"); return; }
+        // Show progress for single keyword search
+        setSearchProgress({ reviewed: 0, passed: 0, keyword: kwInput.trim(), keywords: { done: 0, total: 1 } });
         await fetch("/api/ebay/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ keywords: kwInput.trim(), storeId: selectedStoreId, userId: uid }),
         });
-        toast("✅ Búsqueda completada", "ok");
+        toast("✅ Search complete", "ok");
       } else {
         await handleImport();
         return;
@@ -401,7 +403,7 @@ export default function Dashboard() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       toast(`✅ ${data.added} importados · ${data.skipped} duplicados · ${data.filtered} filtrados`, "ok");
-      if (data.errors > 0) toast(`❌ ${data.errors} errores`, "err");
+      if (data.errors > 0) toast(`❌ ${data.errors} errors`, "err");
       setActiveTab("approved");
     } catch (e: unknown) {
       toast("❌ " + (e instanceof Error ? e.message : String(e)), "err");
@@ -422,7 +424,7 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (data.error) { toast("❌ " + data.error, "err"); return; }
-      toast(`✅ ${data.seller}: ${data.added} agregados de ${data.checked} revisados`, "ok");
+      toast(`✅ ${data.seller}: ${data.added} agregados de ${data.checked} reviewed`, "ok");
       setActiveTab("approved");
     } finally {
       setImportingStore(false);
@@ -453,7 +455,7 @@ export default function Dashboard() {
       });
       const data = await res.json();
       setCleanResult(data);
-      toast(data.delisted > 0 ? `🗑 ${data.delisted} deslistados de ${data.checked}` : `✅ ${data.checked} revisados — todo limpio`, "info");
+      toast(data.delisted > 0 ? `🗑 ${data.delisted} deslistados de ${data.checked}` : `✅ ${data.checked} reviewed — todo limpio`, "info");
     } finally { setCleaning(false); }
   };
 
@@ -593,7 +595,7 @@ export default function Dashboard() {
         {/* ── Sidebar ── */}
         <nav className="app-sidebar" style={{ padding: "0.5rem 0", overflowY: "auto" }}>
 
-          <SidebarLabel text="Cola" />
+          <SidebarLabel text="Queue" />
           {QUEUE_TABS.map(tab => (
             <SidebarItem
               key={tab.key}
@@ -612,14 +614,14 @@ export default function Dashboard() {
 
           <SidebarDivider />
           <SidebarLabel text="Configuración" />
-          <SidebarItem icon="🏬" label="Mis Tiendas" onClick={() => setShowStoreModal(true)} />
-          <SidebarItem icon="⚙" label="Filtros" onClick={() => setShowFiltersModal(true)} />
+          <SidebarItem icon="🏬" label="My Stores" onClick={() => setShowStoreModal(true)} />
+          <SidebarItem icon="⚙" label="Filters" onClick={() => setShowFiltersModal(true)} />
           <SidebarItem icon="🔑" label="Keywords" onClick={() => setShowKeywordsModal(true)} />
-          <SidebarItem icon="📋" label="Políticas eBay" onClick={() => setShowPoliciesModal(true)} />
+          <SidebarItem icon="📋" label="eBay Policies" onClick={() => setShowPoliciesModal(true)} />
 
           <div style={{ flex: 1 }} />
           <SidebarDivider />
-          <SidebarItem icon="→" label="Salir" onClick={async () => {
+          <SidebarItem icon="→" label="Sign Out" onClick={async () => {
             document.cookie = "dropflow_session=; path=/; max-age=0";
             await logout();
           }} />
@@ -643,7 +645,7 @@ export default function Dashboard() {
                 onClick={() => { handleSearch(true, savedSearchState.keywordIndex); }}
                 style={{ padding: "0.38rem 0.9rem", background: "var(--blue)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", whiteSpace: "nowrap" }}
               >
-                ▶ Reanudar
+                ▶ Resume
               </button>
               <button
                 onClick={() => { if (user) clearSearchState(user.uid); setSavedSearchState(null); }}
@@ -667,7 +669,7 @@ export default function Dashboard() {
                     background: searchMode === m ? "rgba(59,130,246,0.12)" : "transparent",
                     color: searchMode === m ? "var(--blue)" : "var(--text2)",
                   }}>
-                  {m === "auto" ? "🤖 Auto" : m === "keyword" ? "🔍 Keyword" : "🔗 URL / Tienda"}
+                  {m === "auto" ? "🤖 Auto" : m === "keyword" ? "🔍 Keyword" : "🔗 URL / Store"}
                 </button>
               ))}
             </div>
@@ -675,16 +677,16 @@ export default function Dashboard() {
             {searchMode === "auto" && (
               <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
                 <p style={{ flex: 1, fontSize: "0.8rem", color: "var(--text2)" }}>
-                  Recorre todas las keywords automáticamente buscando productos CN con ventas validadas.
+                  Automatically cycles through all keywords searching for CN products with validated sales.
                 </p>
                 {stores.length > 0 && !stores.some(s => s.id === selectedStoreId && s.connected) && (
                   <span style={{ fontSize: "0.75rem", color: "var(--amber)", display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                    ⚠ Conecta la tienda primero para obtener datos de ventas
+                    ⚠ Connect the store first to get sales data
                   </span>
                 )}
                 <button onClick={() => handleSearch(true)} disabled={searching}
                   style={{ flexShrink: 0, padding: "0.5rem 1.1rem", background: searching ? "var(--blue-dim)" : "var(--blue)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.83rem", cursor: searching ? "not-allowed" : "pointer" }}>
-                  {searching ? "⏳ Buscando..." : "▶ Iniciar búsqueda"}
+                  {searching ? "⏳ Searching..." : "▶ Start search"}
                 </button>
               </div>
             )}
@@ -694,7 +696,7 @@ export default function Dashboard() {
                 <input
                   value={kwInput} onChange={e => setKwInput(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && !searching && handleSearch(false)}
-                  placeholder="Ej: portable fan, magnetic wallet..."
+                  placeholder="e.g. portable fan, magnetic wallet..."
                   style={{ flex: 1, padding: "0.5rem 0.8rem", background: "var(--bg3)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.85rem", outline: "none" }}
                 />
                 <button onClick={() => handleSearch(false)} disabled={searching}
@@ -708,23 +710,23 @@ export default function Dashboard() {
               <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
                 <textarea
                   value={urlInput} onChange={e => setUrlInput(e.target.value)}
-                  placeholder={"URLs de eBay — una por línea\nhttps://www.ebay.com/itm/..."}
+                  placeholder={"eBay URLs — one per line\nhttps://www.ebay.com/itm/..."}
                   rows={3}
                   style={{ padding: "0.5rem 0.8rem", background: "var(--bg3)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.83rem", resize: "vertical", outline: "none" }}
                 />
                 <button onClick={handleImport} disabled={searching || !urlInput.trim()}
                   style={{ padding: "0.5rem 1.1rem", background: "var(--blue)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.83rem", cursor: "pointer", alignSelf: "flex-end" }}>
-                  {searching ? "⏳ Importando..." : "📥 Importar URLs"}
+                  {searching ? "⏳ Importing..." : "📥 Import URLs"}
                 </button>
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                   <input
                     value={storeUrlInput} onChange={e => setStoreUrlInput(e.target.value)}
-                    placeholder="URL de tienda eBay — ebay.com/str/... o ebay.com/usr/..."
+                    placeholder="eBay store URL — ebay.com/str/... or ebay.com/usr/..."
                     style={{ flex: 1, padding: "0.5rem 0.8rem", background: "var(--bg3)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.83rem", outline: "none" }}
                   />
                   <button onClick={handleImportStore} disabled={importingStore || !storeUrlInput.trim()}
                     style={{ flexShrink: 0, padding: "0.5rem 1rem", background: "var(--cyan)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
-                    {importingStore ? "⏳..." : "🏪 Importar tienda"}
+                    {importingStore ? "⏳..." : "🏪 Import store"}
                   </button>
                 </div>
               </div>
@@ -743,16 +745,16 @@ export default function Dashboard() {
                   <>
                     {searchProgress.keywords.total > 1 && <span>📋 <strong style={{ color: "var(--text)" }}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>}
                     {searchProgress.keyword && <span>🔍 <strong style={{ color: "var(--text)" }}>"{searchProgress.keyword}"</strong></span>}
-                    <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed}</strong> revisados</span>
-                    <span style={{ color: "var(--green)" }}>✅ <strong>{searchProgress.passed}</strong> pasaron</span>
+                    <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed}</strong> reviewed</span>
+                    <span style={{ color: "var(--green)" }}>✅ <strong>{searchProgress.passed}</strong> passed</span>
                   </>
-                ) : <span>Iniciando...</span>}
+                ) : <span>Starting...</span>}
               </div>
               <button
                 onClick={() => { const next = !paused; setPaused(next); pauseRef.current = next; }}
                 style={{ padding: "0.28rem 0.8rem", borderRadius: "var(--radius-sm)", border: "none", fontWeight: 600, cursor: "pointer", fontSize: "0.75rem", background: paused ? "var(--green)" : "var(--amber)", color: "#000" }}
               >
-                {paused ? "▶ Reanudar" : "⏸ Pausar"}
+                {paused ? "▶ Resume" : "⏸ Pause"}
               </button>
             </div>
           )}
@@ -761,7 +763,7 @@ export default function Dashboard() {
           {!showSellers && (
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: 36 }}>
               <div style={{ fontSize: "0.82rem", color: "var(--text3)", fontWeight: 500 }}>
-                {QUEUE_TABS.find(t => t.key === activeTab)?.label} — {stats[activeTab]} productos
+                {QUEUE_TABS.find(t => t.key === activeTab)?.label} — {stats[activeTab]} products
               </div>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 {activeTab === "approved" && stats.approved > 0 && (
@@ -769,12 +771,12 @@ export default function Dashboard() {
                     {publishingAll && (
                       <span style={{ fontSize: "0.78rem", color: "var(--text2)", alignSelf: "center" }}>
                         {publishProgress.done}/{publishProgress.total}
-                        {publishProgress.errors > 0 ? ` · ${publishProgress.errors} errores` : ""}
+                        {publishProgress.errors > 0 ? ` · ${publishProgress.errors} errors` : ""}
                       </span>
                     )}
                     <button onClick={handlePublishAll} disabled={publishingAll}
                       style={{ padding: "0.4rem 1rem", background: "var(--green)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", opacity: publishingAll ? 0.6 : 1 }}>
-                      {publishingAll ? "Publicando..." : `🚀 Publicar todos (${stats.approved})`}
+                      {publishingAll ? "Publishing..." : `🚀 Publish all (${stats.approved})`}
                     </button>
                   </>
                 )}
@@ -854,7 +856,7 @@ export default function Dashboard() {
               {loading ? (
                 <div style={{ gridColumn: "1/-1", display: "flex", flexDirection: "column", alignItems: "center", padding: "4rem", gap: "1rem" }}>
                   <div style={{ width: 30, height: 30, border: "3px solid var(--border)", borderTopColor: "var(--blue)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-                  <span style={{ color: "var(--text2)", fontSize: "0.85rem" }}>Cargando...</span>
+                  <span style={{ color: "var(--text2)", fontSize: "0.85rem" }}>Loading...</span>
                 </div>
               ) : products.length === 0 ? (
                 <div style={{ gridColumn: "1/-1", display: "flex", flexDirection: "column", alignItems: "center", padding: "4rem", gap: "0.75rem" }}>
@@ -862,7 +864,7 @@ export default function Dashboard() {
                     {activeTab === "pending" ? "🔍" : activeTab === "approved" ? "✅" : activeTab === "published" ? "🚀" : activeTab === "failed" ? "⚠️" : "❌"}
                   </span>
                   <p style={{ color: "var(--text3)", fontWeight: 600, fontSize: "0.88rem" }}>
-                    {activeTab === "pending" ? "Cola vacía — busca productos arriba" : `No hay productos ${QUEUE_TABS.find(t => t.key === activeTab)?.label.toLowerCase()}`}
+                    {activeTab === "pending" ? "Cola vacía — busca products arriba" : `No hay products ${QUEUE_TABS.find(t => t.key === activeTab)?.label.toLowerCase()}`}
                   </p>
                   {!selectedStoreId && <p style={{ color: "var(--amber)", fontSize: "0.8rem" }}>⚠ Crea y selecciona una tienda primero</p>}
                 </div>
@@ -888,8 +890,8 @@ export default function Dashboard() {
                     style={{ padding: "0.55rem 2rem", background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text2)", fontSize: "0.85rem", fontWeight: 600, cursor: loadingMore ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: "0.5rem", opacity: loadingMore ? 0.6 : 1 }}
                   >
                     {loadingMore
-                      ? <><div style={{ width: 14, height: 14, border: "2px solid var(--border2)", borderTopColor: "var(--blue)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /> Cargando...</>
-                      : "↓ Ver más productos"}
+                      ? <><div style={{ width: 14, height: 14, border: "2px solid var(--border2)", borderTopColor: "var(--blue)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /> Loading...</>
+                      : "↓ Load more products"}
                   </button>
                 </div>
               )}
@@ -906,7 +908,7 @@ export default function Dashboard() {
               <strong style={{ fontSize: "0.95rem" }}>📊 eBay API Rate Limits</strong>
               <button onClick={() => setShowRateLimits(false)} style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: "1.1rem" }}>✕</button>
             </div>
-            {loadingRateLimits && <div style={{ color: "var(--text2)", textAlign: "center", padding: "2rem" }}>Cargando...</div>}
+            {loadingRateLimits && <div style={{ color: "var(--text2)", textAlign: "center", padding: "2rem" }}>Loading...</div>}
             {rateLimits && [
               { group: rateLimits.app,  label: "⚠️ App-level (diario)", color: "var(--amber)" },
               { group: rateLimits.user, label: "✅ User-level (por hora)", color: "var(--green)" },

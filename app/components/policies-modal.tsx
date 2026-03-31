@@ -115,14 +115,14 @@ export default function PoliciesModal({ onClose }: Props) {
             <div style={{ color: "var(--text3)", fontSize: "0.85rem" }}>Cargando...</div>
           ) : stores.length === 0 ? (
             <div style={{ padding: "1.5rem", textAlign: "center", color: "var(--text3)", fontSize: "0.85rem" }}>
-              Crea una tienda primero en <strong>Mis Tiendas</strong>
+              Create a store first in <strong>Mis Tiendas</strong>
             </div>
           ) : (
             <>
               {/* How to find IDs */}
               <div style={{ padding: "0.65rem 0.85rem", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.75rem", color: "var(--text2)", lineHeight: 1.6 }}>
                 <strong style={{ color: "var(--text)" }}>¿Dónde obtengo estos IDs?</strong><br />
-                Llama a este endpoint con la tienda conectada:<br />
+                Call this endpoint with the store connected:<br />
                 <code style={{ fontSize: "0.72rem", background: "var(--bg2)", padding: "2px 5px", borderRadius: 3, userSelect: "all" }}>
                   /api/ebay/setup?storeId={activeStore || "store_xxx"}
                 </code>
@@ -161,8 +161,8 @@ export default function PoliciesModal({ onClose }: Props) {
               {/* Status */}
               <div style={{ padding: "0.55rem 0.85rem", borderRadius: "var(--radius-sm)", fontSize: "0.75rem", background: isDone(activePolicy) ? "rgba(16,185,129,0.08)" : "rgba(245,158,11,0.07)", border: `1px solid ${isDone(activePolicy) ? "rgba(16,185,129,0.25)" : "rgba(245,158,11,0.25)"}`, color: isDone(activePolicy) ? "var(--green)" : "var(--amber)" }}>
                 {isDone(activePolicy)
-                  ? "✅ Políticas completas — esta tienda puede publicar"
-                  : "⚠ Completa los 4 campos para poder publicar. Vacío = usa valores del .env"}
+                  ? "✅ Policies complete — this store can publish"
+                  : "⚠ Fill in all 4 fields to publish. Empty = uses .env values"}
               </div>
             </>
           )}
@@ -175,7 +175,7 @@ export default function PoliciesModal({ onClose }: Props) {
           </button>
           <button onClick={handleSave} disabled={saving || loading || stores.length === 0}
             style={{ padding: "0.5rem 1.25rem", background: saved ? "var(--green)" : "var(--blue)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}>
-            {saving ? "Guardando..." : saved ? "✓ Guardado" : "Guardar políticas"}
+            {saving ? "Saving..." : saved ? "✓ Saved" : "Save policies"}
           </button>
         </div>
       </div>

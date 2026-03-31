@@ -123,7 +123,7 @@ export default function KeywordsModal({ onClose }: Props) {
 
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-          {([ ["auto", "🔍 Auto-búsqueda"], ["excluded", "🚫 Prohibidas"] ] as const).map(([key, label]) => (
+          {([ ["auto", "🔍 Auto-search"], ["excluded", "🚫 Blocked"] ] as const).map(([key, label]) => (
             <button
               key={key}
               onClick={() => { flushAndSetKws(); setActiveTab(key); }}
@@ -151,7 +151,7 @@ export default function KeywordsModal({ onClose }: Props) {
             value={addInput}
             onChange={e => setAddInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && handleAdd()}
-            placeholder="Pega keywords — coma, espacio, salto de línea, cualquier formato"
+            placeholder="Paste keywords — comma, space, newline, any format"
             style={{ flex: 1, padding: "0.45rem 0.75rem", background: "var(--bg3)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.83rem", outline: "none" }}
           />
           <button
@@ -165,7 +165,7 @@ export default function KeywordsModal({ onClose }: Props) {
 
         {/* Desc */}
         <div style={{ padding: "0.4rem 1.25rem", background: "var(--bg3)", flexShrink: 0, fontSize: "0.73rem", color: "var(--text3)" }}>
-          {isAuto ? "Edita directo o agrega desde arriba. Una por línea. Guarda al terminar." : "Producto se descarta si su título contiene alguna. Una por línea."}
+          {isAuto ? "Edit directly or add from above. One per line. Save when done." : "Product is discarded if its title contains any of these. One per line."}
         </div>
 
         {/* Textarea — raw, sin filtrar al escribir */}
@@ -177,7 +177,7 @@ export default function KeywordsModal({ onClose }: Props) {
               value={rawText}
               onChange={e => setRawText(e.target.value)}
               spellCheck={false}
-              placeholder="Una keyword por línea..."
+              placeholder="One keyword per line..."
               style={{
                 flex: 1, width: "100%", padding: "0.75rem",
                 background: "var(--bg3)", border: "1px solid var(--border2)",
@@ -204,7 +204,7 @@ export default function KeywordsModal({ onClose }: Props) {
               fontWeight: 600, fontSize: "0.85rem", cursor: "pointer",
             }}
           >
-            {saving === activeTab ? "Guardando..." : saved === activeTab ? "✓ Guardado" : "💾 Guardar lista"}
+            {saving === activeTab ? "Saving..." : saved === activeTab ? "✓ Saved" : "💾 Save list"}
           </button>
         </div>
       </div>

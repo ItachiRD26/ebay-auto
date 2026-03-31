@@ -74,12 +74,12 @@ export default function PublishModal({ product, stores, defaultStoreId, onClose,
         {/* Store multi-selector */}
         <div style={{ padding: "0.85rem 1.25rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
           <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 2 }}>
-            Publicar en tiendas <span style={{ color: "var(--text3)", fontWeight: 400, textTransform: "none" }}>(selecciona una o varias)</span>
+            Publicar en tiendas <span style={{ color: "var(--text3)", fontWeight: 400, textTransform: "none" }}>(select one or more)</span>
           </div>
 
           {stores.length === 0 ? (
             <div style={{ padding: "0.75rem", background: "var(--bg3)", borderRadius: "var(--radius-sm)", fontSize: "0.82rem", color: "var(--amber)" }}>
-              ⚠ No tienes tiendas. Crea una en Mis Tiendas.
+              ⚠ No stores found. Create one in My Stores.
             </div>
           ) : (
             stores.map(store => {
@@ -109,7 +109,7 @@ export default function PublishModal({ product, stores, defaultStoreId, onClose,
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: "0.85rem", fontWeight: 500 }}>{store.name}</div>
                     <div style={{ fontSize: "0.72rem", color: "var(--text3)" }}>
-                      {store.marketplace}{store.connected ? " · Conectada" : " · Sin conectar"}
+                      {store.marketplace}{store.connected ? " · Connected" : " · Not connected"}
                     </div>
                   </div>
                 </div>
@@ -119,13 +119,13 @@ export default function PublishModal({ product, stores, defaultStoreId, onClose,
 
           {disconnectedSelected.length > 0 && (
             <div style={{ padding: "0.5rem 0.75rem", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: "var(--radius-sm)", fontSize: "0.76rem", color: "var(--amber)" }}>
-              ⚠ {disconnectedSelected.map(id => stores.find(s => s.id === id)?.name).join(", ")} sin token activo → Ve a Mis Tiendas → Conectar.
+              ⚠ {disconnectedSelected.map(id => stores.find(s => s.id === id)?.name).join(", ")} no active token → Go to My Stores → Connect.
             </div>
           )}
 
           {selectedIds.length > 1 && (
             <div style={{ padding: "0.4rem 0.75rem", background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.2)", borderRadius: "var(--radius-sm)", fontSize: "0.73rem", color: "var(--blue)" }}>
-              📢 Se publicará en {selectedIds.length} tiendas simultáneamente
+              📢 Will publish to {selectedIds.length} stores simultaneously
             </div>
           )}
         </div>
@@ -146,12 +146,12 @@ export default function PublishModal({ product, stores, defaultStoreId, onClose,
               opacity: loading ? 0.7 : 1,
             }}>
             {loading
-              ? "Publicando..."
+              ? "Publishing..."
               : selectedIds.length === 0
-                ? "Selecciona una tienda"
+                ? "Select a store"
                 : selectedIds.length === 1
-                  ? `Publicar en ${stores.find(s => s.id === selectedIds[0])?.name ?? "..."}`
-                  : `Publicar en ${selectedIds.length} tiendas`}
+                  ? `Publish to ${stores.find(s => s.id === selectedIds[0])?.name ?? "..."}`
+                  : `Publish to ${selectedIds.length} stores`}
           </button>
         </div>
       </div>

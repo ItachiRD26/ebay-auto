@@ -34,7 +34,7 @@ function ConnectPageInner() {
   }, [user, params]);
 
   const handleGoToEbay = async () => {
-    if (!selectedId) { setError("Selecciona una tienda primero"); return; }
+    if (!selectedId) { setError("Please select a store first"); return; }
     const res  = await fetch("/api/ebay/oauth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -42,21 +42,21 @@ function ConnectPageInner() {
     });
     const data = await res.json();
     if (data.url) window.open(data.url, "_blank");
-    else setError("No se pudo generar URL de autorización");
+    else setError("Could not generate authorization URL");
   };
 
   const handleConnect = async () => {
     setError("");
     setLoading(true);
     try {
-      if (!selectedId) { setError("Selecciona una tienda primero"); return; }
+      if (!selectedId) { setError("Please select a store first"); return; }
       let code = "";
       try {
         code = new URL(url).searchParams.get("code") ?? "";
       } catch {
-        setError("URL inválida. Pega la URL completa de redirección de eBay."); return;
+        setError("Invalid URL. Paste the full eBay redirect URL."); return;
       }
-      if (!code) { setError("No se encontró el código en la URL. Pega la URL completa."); return; }
+      if (!code) { setError("Authorization code not found. Paste the full redirect URL."); return; }
 
       const res  = await fetch("/api/ebay/oauth/manual", {
         method: "POST",
@@ -64,7 +64,7 @@ function ConnectPageInner() {
         body: JSON.stringify({ code, storeId: selectedId, userId: user?.uid ?? "" }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Error al conectar");
+      if (!res.ok) throw new Error(data.error ?? "Connection failed");
       router.push("/?connected=1");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error desconocido");
@@ -81,18 +81,18 @@ function ConnectPageInner() {
 
         <div>
           <div style={{ fontSize: "1.5rem", marginBottom: "0.35rem" }}>🔗</div>
-          <h1 style={{ fontSize: "1.05rem", fontWeight: 700, marginBottom: "0.3rem" }}>Conectar cuenta eBay</h1>
+          <h1 style={{ fontSize: "1.05rem", fontWeight: 700, marginBottom: "0.3rem" }}>Connect eBay Account</h1>
           <p style={{ fontSize: "0.8rem", color: "var(--text3)" }}>Vincula una cuenta de vendedor eBay a una de tus tiendas.</p>
         </div>
 
         {/* Store selector */}
         {stores.length === 0 ? (
           <div style={{ padding: "0.85rem", background: "var(--bg3)", borderRadius: "var(--radius-sm)", fontSize: "0.83rem", color: "var(--amber)" }}>
-            ⚠ No tienes tiendas. Crea una desde el dashboard → Mis Tiendas.
+            ⚠ No stores found. Create one from the dashboard → My Stores.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text2)" }}>Tienda a conectar</label>
+            <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text2)" }}>Store to connect</label>
             <select
               value={selectedId}
               onChange={e => setSelectedId(e.target.value)}
@@ -100,24 +100,24 @@ function ConnectPageInner() {
             >
               {stores.map(s => (
                 <option key={s.id} value={s.id}>
-                  {s.name} {s.connected ? "✓ Conectada" : "— Sin conectar"}
+                  {s.name} {s.connected ? "✓ Connected" : "— Not connected"}
                 </option>
               ))}
             </select>
             {selectedStore?.connected && (
-              <p style={{ fontSize: "0.73rem", color: "var(--amber)" }}>⚠ Ya conectada. Reconectar reemplazará el token actual.</p>
+              <p style={{ fontSize: "0.73rem", color: "var(--amber)" }}>⚠ Already connected. Reconnecting will replace the current token.</p>
             )}
           </div>
         )}
 
         {/* Steps */}
         <div style={{ background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "0.85rem", fontSize: "0.78rem", color: "var(--text3)", lineHeight: 1.7 }}>
-          <strong style={{ color: "var(--text2)", display: "block", marginBottom: "0.3rem" }}>📋 Pasos:</strong>
-          1. Selecciona la tienda arriba<br />
-          2. Click en «Ir a eBay» — se abre en nueva pestaña<br />
-          3. Inicia sesión con tu cuenta de vendedor y autoriza<br />
-          4. eBay te redirigirá — copia la URL completa<br />
-          5. Pégala abajo y click «Conectar»
+          <strong style={{ color: "var(--text2)", display: "block", marginBottom: "0.3rem" }}>📋 Steps:</strong>
+          1. Select the store above<br />
+          2. Click "Go to eBay" — opens in a new tab<br />
+          3. Sign in with your seller account and authorize<br />
+          4. eBay will redirect you — copy the full URL<br />
+          5. Paste it below and click "Connect"
         </div>
 
         {/* Step 1 */}
@@ -126,16 +126,16 @@ function ConnectPageInner() {
           disabled={!selectedId}
           style={{ padding: "0.65rem", background: selectedId ? "var(--blue)" : "var(--bg3)", color: selectedId ? "#fff" : "var(--text3)", border: selectedId ? "none" : "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.9rem", cursor: selectedId ? "pointer" : "not-allowed" }}
         >
-          → Ir a eBay a autorizar
+          → Go to eBay to authorize
         </button>
 
         {/* Step 2 */}
         <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-          <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text2)" }}>URL de redirección de eBay</label>
+          <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text2)" }}>eBay redirect URL</label>
           <textarea
             value={url}
             onChange={e => setUrl(e.target.value)}
-            placeholder="Pega aquí la URL completa después de autorizar..."
+            placeholder="Paste the full redirect URL after authorizing..."
             rows={3}
             style={{ padding: "0.65rem 0.75rem", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.8rem", resize: "vertical", outline: "none" }}
           />
@@ -152,10 +152,10 @@ function ConnectPageInner() {
           disabled={loading || !url.trim() || !selectedId}
           style={{ padding: "0.65rem", background: "var(--green)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 700, fontSize: "0.92rem", cursor: loading || !url.trim() || !selectedId ? "not-allowed" : "pointer", opacity: loading || !url.trim() || !selectedId ? 0.5 : 1 }}
         >
-          {loading ? "Conectando..." : "✅ Conectar"}
+          {loading ? "Connecting..." : "✅ Connect"}
         </button>
 
-        <a href="/" style={{ textAlign: "center", fontSize: "0.78rem", color: "var(--text3)", textDecoration: "none" }}>← Volver al dashboard</a>
+        <a href="/" style={{ textAlign: "center", fontSize: "0.78rem", color: "var(--text3)", textDecoration: "none" }}>← Back to dashboard</a>
       </div>
     </div>
   );

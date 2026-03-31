@@ -23,11 +23,11 @@ export default function LoginPage() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("invalid-credential") || msg.includes("wrong-password") || msg.includes("user-not-found")) {
-        setError("Email o contraseña incorrectos.");
+        setError("Incorrect email or password.");
       } else if (msg.includes("too-many-requests")) {
-        setError("Demasiados intentos. Intenta más tarde.");
+        setError("Too many attempts. Please try again later.");
       } else {
-        setError("Error al iniciar sesión. Verifica tus datos.");
+        setError("Sign in error. Please check your credentials.");
       }
     } finally {
       setLoading(false);
@@ -59,7 +59,7 @@ export default function LoginPage() {
           <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>⚡</div>
           <div style={{ fontSize: "1.35rem", fontWeight: 700, color: "var(--text)" }}>DropFlow</div>
           <div style={{ fontSize: "0.8rem", color: "var(--text3)", marginTop: "0.25rem" }}>
-            Acceso restringido — solo usuarios autorizados
+            Restricted access — authorized users only
           </div>
         </div>
 
@@ -75,7 +75,7 @@ export default function LoginPage() {
               onChange={e => setEmail(e.target.value)}
               required
               autoComplete="email"
-              placeholder="tu@email.com"
+              placeholder="your@email.com"
               style={{
                 padding: "0.6rem 0.85rem",
                 background: "var(--bg3)",
@@ -93,7 +93,7 @@ export default function LoginPage() {
 
           <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             <label style={{ fontSize: "0.8rem", color: "var(--text2)", fontWeight: 500 }}>
-              Contraseña
+              Password
             </label>
             <input
               type="password"
@@ -161,16 +161,17 @@ export default function LoginPage() {
                   animation: "spin 0.8s linear infinite",
                   display: "inline-block",
                 }} />
-                Ingresando...
+                Signing in...
               </>
-            ) : "Ingresar"}
+            ) : "Sign In"}
           </button>
         </form>
       </div>
 
       {/* Privacy Policy link */}
       <div style={{ position: "absolute", bottom: "1.5rem", left: 0, right: 0, textAlign: "center" }}>
-        <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.75rem", color: "#475569", textDecoration: "none" }}
+        <a href="/privacy" target="_blank" rel="noopener noreferrer"
+          style={{ fontSize: "0.75rem", color: "#475569", textDecoration: "underline" }}
           onMouseEnter={e => (e.currentTarget.style.color = "#94a3b8")}
           onMouseLeave={e => (e.currentTarget.style.color = "#475569")}>
           Privacy Policy
@@ -178,6 +179,7 @@ export default function LoginPage() {
         <span style={{ color: "#334155", margin: "0 0.5rem" }}>·</span>
         <span style={{ fontSize: "0.75rem", color: "#334155" }}>© 2026 DropFlow</span>
       </div>
+
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>

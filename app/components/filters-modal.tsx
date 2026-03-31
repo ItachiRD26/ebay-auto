@@ -122,10 +122,10 @@ export default function FiltersModal({ onClose }: Props) {
           <section>
             <div style={sectionLabel}>💰 Precio</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-              <NumField label="Precio mínimo" field="minPrice" prefix="$" />
-              <NumField label="Precio máximo" field="maxPrice" prefix="$" />
+              <NumField label="Min price" field="minPrice" prefix="$" />
+              <NumField label="Max price" field="maxPrice" prefix="$" />
               <NumField label="Markup %" field="markupPercent" prefix="%" />
-              <NumField label="Margen mínimo" field="minMarginPercent" prefix="%" />
+              <NumField label="Min margin" field="minMarginPercent" prefix="%" />
             </div>
           </section>
 
@@ -133,24 +133,24 @@ export default function FiltersModal({ onClose }: Props) {
           <section>
             <div style={sectionLabel}>📦 Ventas mínimas requeridas</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-              <NumField label="Ventas totales" field="minSoldCount" prefix="#" desc="Mínimo histórico" />
-              <NumField label="Ventas / 30 días" field="minSold30d" prefix="#" desc="Mínimo estimado/mes" />
-              <NumField label="Stock por defecto" field="defaultStock" prefix="#" />
+              <NumField label="Total sales" field="minSoldCount" prefix="#" desc="Historical minimum" />
+              <NumField label="Sales / 30 days" field="minSold30d" prefix="#" desc="Estimated minimum/month" />
+              <NumField label="Default stock" field="defaultStock" prefix="#" />
             </div>
           </section>
 
           {/* Calidad */}
           <section>
             <div style={sectionLabel}>🔍 Calidad</div>
-            <Toggle label="Solo condición NEW" desc="Excluir usados y reacondicionados" field="onlyNewCondition" />
-            <Toggle label="Solo Free Shipping" desc="Solo productos con envío gratis" field="onlyFreeShipping" />
+            <Toggle label="NEW condition only" desc="Exclude used and refurbished" field="onlyNewCondition" />
+            <Toggle label="Free Shipping only" desc="Only products with free shipping" field="onlyFreeShipping" />
           </section>
 
           {/* Policies por tienda */}
           <section>
             <div style={sectionLabel}>📋 Políticas eBay por tienda</div>
             <p style={{ fontSize: "0.73rem", color: "var(--text3)", marginBottom: "0.75rem", lineHeight: 1.5 }}>
-              IDs de tus Business Policies en eBay. Obtenerlos: <code style={{ fontSize: "0.7rem", background: "var(--bg3)", padding: "1px 4px", borderRadius: 3 }}>/api/ebay/setup?storeId=...</code>
+              IDs of your eBay Business Policies. Get them: <code style={{ fontSize: "0.7rem", background: "var(--bg3)", padding: "1px 4px", borderRadius: 3 }}>/api/ebay/setup?storeId=...</code>
             </p>
 
             {/* Store selector */}
@@ -190,7 +190,7 @@ export default function FiltersModal({ onClose }: Props) {
           </button>
           <button onClick={handleSave} disabled={saving}
             style={{ padding: "0.5rem 1.25rem", background: saved ? "var(--green)" : "var(--blue)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}>
-            {saving ? "Guardando..." : saved ? "✓ Guardado" : "Guardar cambios"}
+            {saving ? "Saving..." : saved ? "✓ Saved" : "Save changes"}
           </button>
         </div>
       </div>
