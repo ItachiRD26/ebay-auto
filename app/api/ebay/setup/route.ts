@@ -1,11 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getUserToken } from "@/lib/ebay";
 
 // ─── GET: Fetch all existing policies + inventory locations ──────────────────
-// Call this once to discover the IDs you need for your .env
-export async function GET() {
+// Usage: GET /api/ebay/setup?storeId=store_xxx
+// Call this once to discover the policy IDs you need for your .env
+export async function GET(req: NextRequest) {
   try {
-    const token = await getUserToken();
+    const storeId = new URL(req.url).searchParams.get("storeId");
+    if (!storeId) return NextResponse.json({ error: "storeId requerido como query param" }, { status: 400 });
+
+    const token = await getUserToken(storeId);
 
     const headers = {
       Authorization: `Bearer ${token}`,
@@ -13,78 +17,47 @@ export async function GET() {
       "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
     };
 
-    // Fetch all 3 policy types in parallel
-    const [fulfillmentRes, paymentRes, returnRes, locationRes] =
-      await Promise.all([
-        fetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers }),
-        fetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers }),
-        fetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers }),
-        fetch("https://api.ebay.com/sell/inventory/v1/location", { headers }),
-      ]);
+    const [fulfillmentRes, paymentRes, returnRes, locationRes] = await Promise.all([
+      fetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers }),
+      fetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US",    { headers }),
+      fetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US",     { headers }),
+      fetch("https://api.ebay.com/sell/inventory/v1/location",                                { headers }),
+    ]);
 
-    const [fulfillmentData, paymentData, returnData, locationData] =
-      await Promise.all([
-        fulfillmentRes.json(),
-        paymentRes.json(),
-        returnRes.json(),
-        locationRes.json(),
-      ]);
+    const [fulfillmentData, paymentData, returnData, locationData] = await Promise.all([
+      fulfillmentRes.json(),
+      paymentRes.json(),
+      returnRes.json(),
+      locationRes.json(),
+    ]);
 
-    // Extract just the useful info
     const fulfillmentPolicies = (fulfillmentData.fulfillmentPolicies ?? []).map(
       (p: { fulfillmentPolicyId: string; name: string; marketplaceId: string }) => ({
-        id: p.fulfillmentPolicyId,
-        name: p.name,
-        marketplace: p.marketplaceId,
+        id: p.fulfillmentPolicyId, name: p.name, marketplace: p.marketplaceId,
       })
     );
-
     const paymentPolicies = (paymentData.paymentPolicies ?? []).map(
       (p: { paymentPolicyId: string; name: string; marketplaceId: string }) => ({
-        id: p.paymentPolicyId,
-        name: p.name,
-        marketplace: p.marketplaceId,
+        id: p.paymentPolicyId, name: p.name, marketplace: p.marketplaceId,
       })
     );
-
     const returnPolicies = (returnData.returnPolicies ?? []).map(
       (p: { returnPolicyId: string; name: string; marketplaceId: string }) => ({
-        id: p.returnPolicyId,
-        name: p.name,
-        marketplace: p.marketplaceId,
+        id: p.returnPolicyId, name: p.name, marketplace: p.marketplaceId,
       })
     );
-
     const locations = (locationData.locations ?? []).map(
-      (l: {
-        merchantLocationKey: string;
-        name?: string;
-        location?: { address?: { country?: string; postalCode?: string } };
-        locationStatus?: string;
-      }) => ({
-        key: l.merchantLocationKey,
-        name: l.name ?? "(sin nombre)",
-        country: l.location?.address?.country ?? "",
-        postalCode: l.location?.address?.postalCode ?? "",
+      (l: { merchantLocationKey: string; name?: string; location?: { address?: { country?: string; postalCode?: string } }; locationStatus?: string }) => ({
+        key: l.merchantLocationKey, name: l.name ?? "(sin nombre)",
+        country: l.location?.address?.country ?? "", postalCode: l.location?.address?.postalCode ?? "",
         status: l.locationStatus ?? "",
       })
     );
 
-    // Build suggested .env snippet
-    const suggestedEnv = buildEnvSuggestion(
-      fulfillmentPolicies,
-      paymentPolicies,
-      returnPolicies,
-      locations
-    );
+    const suggestedEnv = buildEnvSuggestion(fulfillmentPolicies, paymentPolicies, returnPolicies, locations);
 
     return NextResponse.json({
-      fulfillmentPolicies,
-      paymentPolicies,
-      returnPolicies,
-      locations,
-      suggestedEnv,
-      // Raw errors if any fetch failed
+      fulfillmentPolicies, paymentPolicies, returnPolicies, locations, suggestedEnv,
       _errors: {
         fulfillment: fulfillmentRes.ok ? null : `HTTP ${fulfillmentRes.status}`,
         payment:     paymentRes.ok     ? null : `HTTP ${paymentRes.status}`,
@@ -98,19 +71,17 @@ export async function GET() {
   }
 }
 
-// ─── POST: Create a new inventory location if none exist ─────────────────────
-export async function POST(req: Request) {
+// ─── POST: Create a new inventory location ────────────────────────────────────
+// Body: { storeId, locationKey, name, postalCode, country? }
+export async function POST(req: NextRequest) {
   try {
-    const { locationKey, name, postalCode, country = "US" } = await req.json();
+    const { storeId, locationKey, name, postalCode, country = "US" } = await req.json();
 
-    if (!locationKey || !postalCode) {
-      return NextResponse.json(
-        { error: "locationKey and postalCode are required" },
-        { status: 400 }
-      );
-    }
+    if (!storeId)     return NextResponse.json({ error: "storeId requerido" },     { status: 400 });
+    if (!locationKey) return NextResponse.json({ error: "locationKey requerido" }, { status: 400 });
+    if (!postalCode)  return NextResponse.json({ error: "postalCode requerido" },  { status: 400 });
 
-    const token = await getUserToken();
+    const token = await getUserToken(storeId);
 
     const res = await fetch(
       `https://api.ebay.com/sell/inventory/v1/location/${encodeURIComponent(locationKey)}`,
@@ -124,12 +95,7 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           name: name ?? locationKey,
           locationTypes: ["WAREHOUSE"],
-          location: {
-            address: {
-              country,
-              postalCode,
-            },
-          },
+          location: { address: { country, postalCode } },
           merchantLocationStatus: "ENABLED",
         }),
       }
@@ -137,16 +103,12 @@ export async function POST(req: Request) {
 
     if (!res.ok && res.status !== 204) {
       const err = await res.text();
-      return NextResponse.json(
-        { error: `eBay error (${res.status}): ${err.slice(0, 300)}` },
-        { status: res.status }
-      );
+      return NextResponse.json({ error: `eBay error (${res.status}): ${err.slice(0, 300)}` }, { status: res.status });
     }
 
     return NextResponse.json({
-      success: true,
-      locationKey,
-      message: `Location "${locationKey}" creada correctamente. Agrégala a tu .env como EBAY_MERCHANT_LOCATION_KEY=${locationKey}`,
+      success: true, locationKey,
+      message: `Location "${locationKey}" creada. Agrégala a tu .env como EBAY_MERCHANT_LOCATION_KEY=${locationKey}`,
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -154,34 +116,27 @@ export async function POST(req: Request) {
   }
 }
 
-// ─── Helper: build suggested .env block ──────────────────────────────────────
 function buildEnvSuggestion(
   fulfillment: { id: string; name: string }[],
   payment: { id: string; name: string }[],
   returnP: { id: string; name: string }[],
   locations: { key: string; name: string }[]
 ): string {
-  const f = fulfillment[0];
-  const p = payment[0];
-  const r = returnP[0];
-  const l = locations[0];
-
-  const lines: string[] = [
+  const f = fulfillment[0], p = payment[0], r = returnP[0], l = locations[0];
+  const lines = [
     "# ── Pega esto en tu .env ──────────────────────────────────────",
-    `EBAY_FULFILLMENT_POLICY_ID=${f ? f.id : "⚠️  NO ENCONTRADO — crea una política de envío en eBay Business Policies"}`,
-    `EBAY_PAYMENT_POLICY_ID=${p ? p.id : "⚠️  NO ENCONTRADO — crea una política de pago en eBay Business Policies"}`,
-    `EBAY_RETURN_POLICY_ID=${r ? r.id : "⚠️  NO ENCONTRADO — crea una política de devolución en eBay Business Policies"}`,
-    `EBAY_MERCHANT_LOCATION_KEY=${l ? l.key : "⚠️  NO ENCONTRADO — haz POST a este endpoint con { locationKey, postalCode } para crear una"}`,
+    `EBAY_FULFILLMENT_POLICY_ID=${f ? f.id : "⚠️  NO ENCONTRADO"}`,
+    `EBAY_PAYMENT_POLICY_ID=${p ? p.id : "⚠️  NO ENCONTRADO"}`,
+    `EBAY_RETURN_POLICY_ID=${r ? r.id : "⚠️  NO ENCONTRADO"}`,
+    `EBAY_MERCHANT_LOCATION_KEY=${l ? l.key : "⚠️  NO ENCONTRADO"}`,
   ];
-
   if (fulfillment.length > 1) {
-    lines.push(`\n# Tienes ${fulfillment.length} fulfillment policies, se usó la primera. Otras opciones:`);
-    fulfillment.slice(1).forEach((fp) => lines.push(`#   ${fp.id}  →  ${fp.name}`));
+    lines.push(`\n# Otras fulfillment policies:`);
+    fulfillment.slice(1).forEach(fp => lines.push(`#   ${fp.id}  →  ${fp.name}`));
   }
   if (locations.length > 1) {
-    lines.push(`\n# Tienes ${locations.length} locations, se usó la primera. Otras opciones:`);
-    locations.slice(1).forEach((loc) => lines.push(`#   ${loc.key}  →  ${loc.name}`));
+    lines.push(`\n# Otras locations:`);
+    locations.slice(1).forEach(loc => lines.push(`#   ${loc.key}  →  ${loc.name}`));
   }
-
   return lines.join("\n");
 }
