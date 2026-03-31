@@ -103,6 +103,7 @@ async function addFixedPriceItem(product: {
   stock: number; images: string[]; condition: string; aspects: Record<string, string[]>;
   variations?: VariationsData | null; markupRatio?: number;
   fulfillmentPolicyId?: string; paymentPolicyId?: string; returnPolicyId?: string;
+  itemCountry?: string; itemLocation?: string;
 }, userToken: string): Promise<{ itemId: string }> {
   const isChinese = (v: string) => /[\u4e00-\u9fff]/.test(v);
   const aspects = { ...product.aspects };
@@ -210,12 +211,12 @@ async function addFixedPriceItem(product: {
     ${!hasVariations ? `<StartPrice>${product.price.toFixed(2)}</StartPrice>` : ""}
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
     <ConditionID>${conditionId}</ConditionID>
-    <Country>DO</Country>
+    <Country>${product.itemCountry ?? "CN"}</Country>
     <Currency>USD</Currency>
     <DispatchTimeMax>5</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
-    <Location>China</Location>
+    <Location>${product.itemLocation ?? "Shenzhen"}</Location>
     ${!hasVariations ? `<Quantity>${product.stock}</Quantity>` : ""}
     <PictureDetails>${picturesXml}</PictureDetails>
     ${specificsXml ? `<ItemSpecifics>${specificsXml}</ItemSpecifics>` : ""}
@@ -262,6 +263,8 @@ async function getStorePolicies(userId: string, storeId: string): Promise<{
   fulfillmentPolicyId: string;
   paymentPolicyId:     string;
   returnPolicyId:      string;
+  itemCountry:         string;
+  itemLocation:        string;
 }> {
   try {
     const snap = await settingsDoc(userId, "main").get();
@@ -269,13 +272,21 @@ async function getStorePolicies(userId: string, storeId: string): Promise<{
     const policies = data?.policies as Record<string, Record<string, string>> | undefined;
     const p = policies?.[storeId];
     if (p?.fulfillmentPolicyId && p?.paymentPolicyId && p?.returnPolicyId) {
-      return { fulfillmentPolicyId: p.fulfillmentPolicyId, paymentPolicyId: p.paymentPolicyId, returnPolicyId: p.returnPolicyId };
+      return {
+        fulfillmentPolicyId: p.fulfillmentPolicyId,
+        paymentPolicyId:     p.paymentPolicyId,
+        returnPolicyId:      p.returnPolicyId,
+        itemCountry:         p.itemCountry   ?? "CN",
+        itemLocation:        p.itemLocation  ?? "Shenzhen",
+      };
     }
   } catch {}
   return {
     fulfillmentPolicyId: process.env.EBAY_FULFILLMENT_POLICY_ID ?? "",
     paymentPolicyId:     process.env.EBAY_PAYMENT_POLICY_ID     ?? "",
-    returnPolicyId:      process.env.EBAY_RETURN_POLICY_ID       ?? "",
+    returnPolicyId:      process.env.EBAY_RETURN_POLICY_ID      ?? "",
+    itemCountry:         "CN",
+    itemLocation:        "Shenzhen",
   };
 }
 
@@ -337,7 +348,7 @@ export async function publishProductById(productId: string, userToken: string, u
   const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters"];
 
   try {
-    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
+    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
     itemId = result.itemId;
   } catch (firstErr: unknown) {
     const errMsg = String(firstErr instanceof Error ? firstErr.message : firstErr);
@@ -367,7 +378,7 @@ export async function publishProductById(productId: string, userToken: string, u
 
     console.log(`[publish] 🔄 Reintentando con correcciones...`);
     try {
-      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
+      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
       itemId = result2.itemId;
       console.log(`[publish] ✅ Publicado tras corrección automática — ID: ${itemId}`);
     } catch (retryErr: unknown) {
@@ -380,7 +391,7 @@ export async function publishProductById(productId: string, userToken: string, u
         if (altRef.categoryId) publishCatId = altRef.categoryId;
         if (altRef.aspects && Object.keys(altRef.aspects).length > 0) publishAspects = { ...publishAspects, ...altRef.aspects };
         try {
-          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
+          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
           itemId = result3.itemId;
           console.log(`[publish] ✅ Publicado con referencia alternativa — ID: ${itemId}`);
         } catch (altErr: unknown) {
@@ -389,7 +400,7 @@ export async function publishProductById(productId: string, userToken: string, u
             publishCatId = getLeafCategoryByTitle(publishTitle);
             publishAspects = { Brand: ["Unbranded"], MPN: ["Does Not Apply"] };
             console.log(`[publish] 🔧 Último recurso: cat=${publishCatId} para "${publishTitle.slice(0,40)}"`);
-            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId }, userToken);
+            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
             itemId = result4.itemId;
             console.log(`[publish] ✅ Publicado con fallback máximo — ID: ${itemId}`);
           } else throw altErr;

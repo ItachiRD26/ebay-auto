@@ -69,6 +69,8 @@ export interface StorePolicy {
   paymentPolicyId:     string;
   returnPolicyId:      string;
   merchantLocationKey: string;
+  itemCountry:         string;  // ISO code, e.g. "CN" — shown as item origin country
+  itemLocation:        string;  // City string, e.g. "Shenzhen" — shown to buyer
 }
 
 export interface Settings {

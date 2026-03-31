@@ -48,7 +48,7 @@ export default function FiltersModal({ onClose }: Props) {
       ...p,
       policies: {
         ...p.policies,
-        [storeId]: { ...(p.policies?.[storeId] ?? { fulfillmentPolicyId: "", paymentPolicyId: "", returnPolicyId: "", merchantLocationKey: "" }), [field]: val },
+        [storeId]: { ...(p.policies?.[storeId] ?? { fulfillmentPolicyId: "", paymentPolicyId: "", returnPolicyId: "", merchantLocationKey: "", itemCountry: "CN", itemLocation: "Shenzhen" }), [field]: val },
       },
     }));
   };
@@ -62,9 +62,7 @@ export default function FiltersModal({ onClose }: Props) {
     setTimeout(() => setSaved(false), 2000);
   };
 
-  const activePolicy: StorePolicy = settings.policies?.[activeStore] ?? {
-    fulfillmentPolicyId: "", paymentPolicyId: "", returnPolicyId: "", merchantLocationKey: "",
-  };
+  const activePolicy: StorePolicy = settings.policies?.[activeStore] ?? { fulfillmentPolicyId: "", paymentPolicyId: "", returnPolicyId: "", merchantLocationKey: "", itemCountry: "CN", itemLocation: "Shenzhen" };
 
   const NumField = ({ label, field, prefix, desc }: { label: string; field: keyof Settings; prefix: string; desc?: string }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>

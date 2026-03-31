@@ -13,6 +13,8 @@ const EMPTY_POLICY: StorePolicy = {
   paymentPolicyId:     "",
   returnPolicyId:      "",
   merchantLocationKey: "",
+  itemCountry:         "CN",
+  itemLocation:        "Shenzhen",
 };
 
 export default function PoliciesModal({ onClose }: Props) {
@@ -64,7 +66,9 @@ export default function PoliciesModal({ onClose }: Props) {
     { label: "Fulfillment Policy ID", field: "fulfillmentPolicyId", placeholder: "ej: 123456789010", hint: "Política de envío" },
     { label: "Payment Policy ID",     field: "paymentPolicyId",     placeholder: "ej: 123456789011", hint: "Política de pago" },
     { label: "Return Policy ID",      field: "returnPolicyId",       placeholder: "ej: 123456789012", hint: "Política de devoluciones" },
-    { label: "Merchant Location Key", field: "merchantLocationKey",  placeholder: "ej: WAREHOUSE_US",  hint: "Clave de ubicación de inventario" },
+    { label: "Merchant Location Key", field: "merchantLocationKey",  placeholder: "ej: warehouse-2",   hint: "Clave de ubicación de inventario" },
+    { label: "País del item (Country code)", field: "itemCountry",  placeholder: "ej: CN",            hint: "Código ISO del país de origen" },
+    { label: "Ciudad / Ubicación visible",   field: "itemLocation", placeholder: "ej: Shenzhen",      hint: "Lo que ve el comprador como origen" },
   ];
 
   const isDone = (p: StorePolicy) =>
