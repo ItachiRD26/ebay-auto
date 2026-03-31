@@ -1,4 +1,4 @@
-import { db, COLLECTIONS, queueCol, settingsDoc } from "@/lib/firebase";
+import { db, COLLECTIONS, queueCol, settingsDoc, seenCol } from "@/lib/firebase";
 import { getReferenceItemData, getCategoryIdForTitle, getTradingCategoryForTitle } from "@/lib/ebay";
 
 interface VariationSpec { specifics: Record<string, string>; refPrice: number; }
@@ -414,6 +414,20 @@ export async function publishProductById(productId: string, userToken: string, u
   }
 
   await docRef.update({ status: "published", publishedAt: Date.now(), listingId: itemId!, bidPercentage: 2.0, updatedAt: Date.now() });
+
+  // Write to seen_items so it's never re-added to queue even if product is cleaned up later
+  const rawItemId = String(product.ebayItemId ?? "");
+  const numericItemId = rawItemId.split("|")[1] ?? rawItemId;
+  if (numericItemId) {
+    await seenCol(userId).doc(numericItemId).set({
+      ebayItemId:  numericItemId,
+      title:       product.title ?? "",
+      reason:      "published",
+      listingId:   itemId!,
+      seenAt:      Date.now(),
+      productId,
+    });
+  }
 
   await new Promise(r => setTimeout(r, 3000));
   await applyPromotedListing(itemId!, userToken);

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { queueCol } from "@/lib/firebase";
+import { queueCol, seenCol } from "@/lib/firebase";
 
 export async function PATCH(req: NextRequest) {
   try {
@@ -22,6 +22,25 @@ export async function PATCH(req: NextRequest) {
     }
 
     await queueCol(userId).doc(productId).update(safeUpdates);
+
+    // When rejecting: write to seen_items so it never shows up again, then delete from queue
+    if (updates.status === "rejected") {
+      const productDoc = await queueCol(userId).doc(productId).get();
+      const product = productDoc.data() as Record<string, unknown> | undefined;
+      const ebayItemId = product?.ebayItemId ? String(product.ebayItemId).split("|")[1] ?? String(product.ebayItemId) : null;
+      if (ebayItemId) {
+        await seenCol(userId).doc(ebayItemId).set({
+          ebayItemId,
+          title:     product?.title ?? "",
+          reason:    "rejected",
+          seenAt:    Date.now(),
+          productId,
+        });
+      }
+      // Delete from queue to save space — seen_items keeps the memory
+      await queueCol(userId).doc(productId).delete();
+    }
+
     return NextResponse.json({ success: true });
   } catch (e: unknown) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });

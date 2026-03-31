@@ -18,7 +18,7 @@ const CONFIG = {
 
 // ─── Keywords — loaded dynamically from Firestore, fallback to defaults ─────────
 import { DEFAULT_AUTO_KEYWORDS, DEFAULT_EXCLUDED_KEYWORDS } from "@/api/ebay/keywords/route";
-import { queueCol, settingsDoc } from "@/lib/firebase";
+import { queueCol, settingsDoc, seenCol } from "@/lib/firebase";
 
 // 60-second in-memory cache so we don't hit Firestore on every item
 let _kwCache: { auto: string[]; excluded: string[]; fetchedAt: number } | null = null;
@@ -312,17 +312,24 @@ async function processItem(
     return false;
   }
 
-  // ── 6. Duplicate check ──────────────────────────────────────────────────────
-  const dup = await queueCol(userId).where("ebayItemId", "==", numericId).limit(1).get();
-  if (!dup.empty) {
-    console.log(`      ⚠️  DUPLICADO (itemId)`);
+  // ── 6. Duplicate check — seen_items first (fast), then queue ────────────────
+  const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
+
+  // Check seen_items (light collection — survives product deletion)
+  const seenDoc = await seenCol(userId).doc(numericId).get();
+  if (seenDoc.exists) {
+    console.log(`      ⚠️  YA VISTO (seen_items: ${(seenDoc.data() as Record<string,unknown>)?.reason ?? "?"}) `);
     return false;
   }
 
-  // Also check by normalized title (first 60 chars) to catch same product with diff ID
-  const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
-  const titleDup = await queueCol(userId)
-    .where("normalizedTitle", "==", normalizedTitle).limit(1).get();
+  // Fallback: also check queue (for items added before seen_items existed)
+  const dup = await queueCol(userId).where("ebayItemId", "==", numericId).limit(1).get();
+  if (!dup.empty) {
+    console.log(`      ⚠️  DUPLICADO (queue itemId)`);
+    return false;
+  }
+
+  const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
   if (!titleDup.empty) {
     console.log(`      ⚠️  DUPLICADO (título: "${normalizedTitle.slice(0, 40)}")`);
     return false;

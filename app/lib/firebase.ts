@@ -22,6 +22,7 @@ export const userCol = (userId: string, col: string) =>
 // Convenience shorthands
 export const queueCol    = (userId: string) => userCol(userId, "products_queue");
 export const storesCol   = (userId: string) => userCol(userId, "stores");
+export const seenCol     = (userId: string) => userCol(userId, "seen_items");
 export const settingsDoc = (userId: string, docId = "main") =>
   db.collection("users").doc(userId).collection("settings").doc(docId);
 
