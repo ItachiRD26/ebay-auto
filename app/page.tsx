@@ -9,7 +9,8 @@ import ProductCard from "@/components/product-card";
 import PublishModal  from "@/components/publish-modal";
 import StoreModal    from "@/components/store-modal";
 import FiltersModal  from "@/components/filters-modal";
-import KeywordsModal from "@/components/keywords-modal";
+import KeywordsModal    from "@/components/keywords-modal";
+import PoliciesModal   from "@/components/policies-modal";
 import { saveSearchState, loadSearchState, clearSearchState, type SavedSearchState } from "@/lib/search-state";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -69,6 +70,7 @@ export default function Dashboard() {
   const [showStoreModal,    setShowStoreModal]    = useState(false);
   const [showFiltersModal,  setShowFiltersModal]  = useState(false);
   const [showKeywordsModal, setShowKeywordsModal] = useState(false);
+  const [showPoliciesModal, setShowPoliciesModal]   = useState(false);
   const [showRateLimits,    setShowRateLimits]    = useState(false);
   const [showSellers,       setShowSellers]       = useState(false);
 
@@ -581,6 +583,7 @@ export default function Dashboard() {
           <SidebarItem icon="🏬" label="Mis Tiendas" onClick={() => setShowStoreModal(true)} />
           <SidebarItem icon="⚙" label="Filtros" onClick={() => setShowFiltersModal(true)} />
           <SidebarItem icon="🔑" label="Keywords" onClick={() => setShowKeywordsModal(true)} />
+          <SidebarItem icon="📋" label="Políticas eBay" onClick={() => setShowPoliciesModal(true)} />
 
           <div style={{ flex: 1 }} />
           <SidebarDivider />
@@ -903,7 +906,8 @@ export default function Dashboard() {
       {/* ── Settings modals ── */}
       {showStoreModal    && <StoreModal    stores={stores} userId={uid} onClose={() => setShowStoreModal(false)}    onStoresChange={setStores} />}
       {showFiltersModal  && <FiltersModal  onClose={() => setShowFiltersModal(false)} />}
-      {showKeywordsModal && <KeywordsModal onClose={() => setShowKeywordsModal(false)} />}
+      {showKeywordsModal && <KeywordsModal  onClose={() => setShowKeywordsModal(false)} />}
+      {showPoliciesModal  && <PoliciesModal   onClose={() => setShowPoliciesModal(false)} />}
 
       {/* ── Toast stack ── */}
       <div style={{ position: "fixed", bottom: "1.25rem", right: "1.25rem", zIndex: 1000, display: "flex", flexDirection: "column", gap: "0.4rem", pointerEvents: "none" }}>
