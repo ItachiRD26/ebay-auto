@@ -43,10 +43,10 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
       const res = await fetch("/api/ebay/delist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: product.id, listingId: product.listingId }),
+        body: JSON.stringify({ productId: product.id, listingId: product.listingId, storeId: product.storeId, userId: product.userId }),
       });
       const data = await res.json();
-      if (data.error) alert("Error: " + data.error);
+      if (data.error) { alert("Error al deslistar: " + data.error); } else { alert("✅ Producto deslistado de eBay"); }
     } finally {
       setDelisting(false);
     }
@@ -153,29 +153,33 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
           </div>
         )}
 
-        <div className="actions">
+        <div>
           {product.status === "pending" && (
-            <>
-              <button className="btn btn-edit" onClick={() => setEditing(!editing)}>{editing ? "✕ Cancelar" : "✏ Editar"}</button>
-              {editing && <button className="btn btn-save" onClick={handleSave}>💾 Guardar</button>}
-              <button className="btn btn-reject" onClick={onReject}>✕</button>
+            <div className={`actions-pending ${editing ? "actions-pending" : ""}`} style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto 1fr 1fr" : "1fr 1fr" }}>
+              <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ gridColumn: editing ? "1" : "1" }}>{editing ? "✕" : "✏ Editar"}</button>
+              {editing && <button className="btn btn-save" onClick={handleSave}>💾</button>}
+              <button className="btn btn-reject" onClick={onReject}>✕ Rechazar</button>
               <button className="btn btn-approve" onClick={() => { handleSave(); onApprove(); }}>✓ Aprobar</button>
-            </>
+            </div>
           )}
           {product.status === "approved" && (
-            <>
-              <button className="btn btn-edit" onClick={() => setEditing(!editing)}>{editing ? "✕" : "✏ Editar"}</button>
-              {editing && <button className="btn btn-save" onClick={handleSave}>💾</button>}
-              <button className="btn btn-reject" onClick={onReject} title="No aprobar — mover a rechazados">✕ No listar</button>
+            <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto auto 1fr" : "auto auto 1fr" }}>
+              <button className="btn btn-icon btn-edit" onClick={() => setEditing(!editing)} title={editing ? "Cancelar edición" : "Editar"}>
+                {editing ? "✕" : "✏"}
+              </button>
+              {editing && <button className="btn btn-icon btn-save" onClick={handleSave} title="Guardar cambios">💾</button>}
+              <button className="btn btn-icon btn-reject" onClick={onReject} title="Mover a rechazados">✕</button>
               <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
                 {publishing ? "Publicando..." : "🚀 Publicar en eBay"}
               </button>
-            </>
+            </div>
           )}
           {product.status === "published" && (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-              <span className="published-info">✅ Publicado · ID {product.listingId}{product.bidPercentage ? ` · 📢 ${product.bidPercentage}% ads` : ""}</span>
-              <button className="btn btn-reject" onClick={handleDelist} disabled={delisting} title="Deslistar de eBay">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.4rem", alignItems: "center" }}>
+              <span className="published-info" title={`ID: ${product.listingId}`}>
+                ✅ ID {product.listingId}{product.bidPercentage ? ` · 📢 ${product.bidPercentage}%` : ""}
+              </span>
+              <button className="btn btn-delist" onClick={handleDelist} disabled={delisting} title="Deslistar de eBay" style={{ whiteSpace: "nowrap" }}>
                 {delisting ? "..." : "🗑 Deslistar"}
               </button>
             </div>
@@ -183,7 +187,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
           {product.status === "failed" && (
             <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem" }}>
               <p className="fail-reason">⚠️ {product.failReason ?? "Error desconocido"}</p>
-              <button className="btn btn-edit" onClick={() => setEditing(!editing)}>
+              <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ width: "100%" }}>
                 {editing ? "✕ Cerrar editor" : "✏ Editar y reintentar"}
               </button>
               {editing && (
@@ -323,15 +327,21 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         .field-label { display: block; font-size: 0.7rem; color: #4a5568; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.3rem; }
         .desc-input { width: 100%; background: #111120; border: 1px solid #2d3748; border-radius: 6px; color: #e2e8f0; font-size: 0.82rem; padding: 0.5rem; resize: vertical; outline: none; box-sizing: border-box; }
         .stock-input { background: #111120; border: 1px solid #2d3748; border-radius: 6px; color: #e2e8f0; font-size: 0.85rem; padding: 0.3rem 0.5rem; width: 80px; outline: none; }
-        .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-        .btn { flex: 1; padding: 0.5rem 0.75rem; border-radius: 7px; font-size: 0.8rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; min-width: 60px; }
+        .actions { display: grid; gap: 0.4rem; }
+        .actions-pending  { grid-template-columns: auto auto 1fr 1fr; }
+        .actions-approved { grid-template-columns: auto auto 1fr; }
+        .actions-published { grid-template-columns: 1fr auto; }
+        .actions-failed   { grid-template-columns: 1fr; }
+        .btn { padding: 0.5rem 0.7rem; border-radius: 7px; font-size: 0.8rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-edit { background: #1a1a2e; color: #94a3b8; border: 1px solid #2d3748; }
-        .btn-save { background: #1e3a5f; color: #60a5fa; }
-        .btn-reject { background: #1a0a0a; color: #ef4444; border: 1px solid #7f1d1d44; flex: 0; }
+        .btn-icon { padding: 0.5rem 0.65rem; flex-shrink: 0; }
+        .btn-edit    { background: #1a1a2e; color: #94a3b8; border: 1px solid #2d3748; }
+        .btn-save    { background: #1e3a5f; color: #60a5fa; border: 1px solid #1d4ed855; }
+        .btn-reject  { background: #1a0a0a; color: #ef4444; border: 1px solid #7f1d1d44; }
         .btn-approve { background: #064e3b44; color: #10b981; border: 1px solid #064e3b; }
-        .btn-publish { flex: 2; background: linear-gradient(135deg, #1d4ed8, #2563eb); color: #fff; }
-        .published-info { font-size: 0.75rem; color: #64748b; padding: 0.5rem; }
+        .btn-publish { background: linear-gradient(135deg, #1d4ed8, #2563eb); color: #fff; }
+        .btn-delist  { background: #1a0a0a; color: #ef4444; border: 1px solid #7f1d1d44; }
+        .published-info { font-size: 0.73rem; color: #64748b; display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       `}</style>
     </div>
   );
