@@ -169,7 +169,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             <div className={`actions-pending ${editing ? "actions-pending" : ""}`} style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto 1fr 1fr" : "1fr 1fr" }}>
               <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ gridColumn: editing ? "1" : "1" }}>{editing ? "✕" : "✏ Edit"}</button>
               {editing && <button className="btn btn-save" onClick={handleSave}>💾</button>}
-              <button className="btn btn-reject" onClick={onReject}>✕ Rechazar</button>
+              <button className="btn btn-reject" onClick={() => setShowRejectConfirm(true)}>✕ Reject</button>
               <button className="btn btn-approve" onClick={() => { handleSave(); onApprove(); }}>✓ Aprobar</button>
             </div>
           )}
@@ -299,7 +299,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
               )}
               {!editing && (
                 <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
-                  {publishing ? "Reintentando..." : "🔄 Retry"}
+                  {publishing ? "Reintentando..." : "🔄 Retry without editing"}
                 </button>
               )}
             </div>
@@ -366,6 +366,66 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         .btn-delist  { background: #1a0a0a; color: #ef4444; border: 1px solid #7f1d1d44; }
         .published-info { font-size: 0.73rem; color: #64748b; display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       `}</style>
+
+      {/* ── Reject Confirmation Modal ─────────────────────────────────── */}
+      {showRejectConfirm && (
+        <div
+          onClick={() => setShowRejectConfirm(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 600,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: "#0f0f1a", border: "1px solid #2d3748", borderRadius: 12,
+              width: "100%", maxWidth: 380, overflow: "hidden" }}
+          >
+            <div style={{ display: "flex", gap: "0.75rem", padding: "1rem",
+              borderBottom: "1px solid #1e2235", alignItems: "center" }}>
+              {product.images?.[0]
+                ? <img src={product.images[0]} alt="" style={{ width: 56, height: 56,
+                    objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />
+                : <div style={{ width: 56, height: 56, background: "#1a1a2e", borderRadius: 6, flexShrink: 0 }} />
+              }
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "#e2e8f0",
+                  overflow: "hidden", textOverflow: "ellipsis",
+                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                  {product.title}
+                </div>
+                <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: 2 }}>
+                  ${product.suggestedSellingPrice?.toFixed(2)}
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: "1rem", textAlign: "center" }}>
+              <div style={{ fontSize: "1.5rem", marginBottom: "0.5rem" }}>🗑</div>
+              <div style={{ fontSize: "0.88rem", fontWeight: 600, color: "#e2e8f0", marginBottom: "0.35rem" }}>
+                Reject this product?
+              </div>
+              <div style={{ fontSize: "0.78rem", color: "#64748b", lineHeight: 1.5 }}>
+                It will be removed from the queue and won&apos;t appear in future searches.
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", padding: "0 1rem 1rem" }}>
+              <button
+                onClick={() => setShowRejectConfirm(false)}
+                style={{ padding: "0.55rem", background: "#1a1a2e", border: "1px solid #2d3748",
+                  borderRadius: 7, color: "#94a3b8", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setShowRejectConfirm(false); onReject(); }}
+                style={{ padding: "0.55rem", background: "#1a0a0a", border: "1px solid #7f1d1d44",
+                  borderRadius: 7, color: "#ef4444", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
+              >
+                ✕ Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

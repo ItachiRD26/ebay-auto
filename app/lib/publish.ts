@@ -482,6 +482,16 @@ export async function publishProductById(productId: string, userToken: string, u
   const prevFail = String(product.failReason ?? "").toLowerCase();
   const wasImproper = prevFail.includes("improper") || prevFail.includes("policy") || prevFail.includes("violation");
 
+  // When retrying after improper, always use our local category mapping
+  // instead of trusting the CN seller's category (which may be restricted for new accounts)
+  if (wasImproper && refCategoryId) {
+    const localCat = getLeafCategoryByTitle(product.title);
+    if (localCat !== refCategoryId) {
+      console.log(`[publish] ♻ wasImproper: overriding CN cat ${refCategoryId} → local ${localCat}`);
+      refCategoryId = localCat;
+    }
+  }
+
   let publishTitle: string;
   let publishDesc:  string;
 
