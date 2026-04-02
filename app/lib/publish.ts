@@ -484,11 +484,37 @@ export async function publishProductById(productId: string, userToken: string, u
   }
 
   const markupRatio = product.totalMarketCost > 0 ? product.suggestedSellingPrice / product.totalMarketCost : 1.06;
-  const { title: cleanTitle, description } = await generateTitleAndDescription(product.title, refAspects);
+
+  // If previous attempt failed with improper/policy error, skip standard generate
+  // and go straight to aggressive clean rewrite — don't repeat the same mistake
+  const prevFail = String(product.failReason ?? "").toLowerCase();
+  const wasImproper = prevFail.includes("improper") || prevFail.includes("policy") || prevFail.includes("violation");
+
+  let publishTitle: string;
+  let publishDesc:  string;
+
+  if (wasImproper) {
+    // Aggressive pre-clean of the title before sending to Claude
+    const strippedTitle = product.title
+      .replace(/[一-鿿　-〿＀-￯]+/g, " ")  // strip CJK
+      .replace(/[^\w\s,\-()'&]/g, " ")                                // safe chars only
+      .replace(/\s{2,}/g, " ").trim().slice(0, 75);
+    const fix = await autoFixWithClaude("improper listing policy violation", {
+      title: strippedTitle,
+      description: "",
+      categoryId: "",
+      aspects: refAspects,
+    });
+    publishTitle = fix?.title ?? strippedTitle;
+    publishDesc  = fix?.description ?? `High-quality ${strippedTitle}. Practical and durable for everyday use. Easy to maintain. Fast shipping included.`;
+    console.log(`[publish] ♻ Retry after improper — forced clean rewrite: "${publishTitle}"`);
+  } else {
+    const { title: cleanTitle, description } = await generateTitleAndDescription(product.title, refAspects);
+    publishTitle = cleanTitle;
+    publishDesc  = description;
+  }
 
   let itemId: string;
-  let publishTitle = cleanTitle;
-  let publishDesc  = description;
   const rawCatId    = refCategoryId || getLeafCategoryByTitle(product.title);
   let publishCatId  = await validateAndFixCategory(rawCatId, product.title);
   let publishAspects = { ...refAspects };
