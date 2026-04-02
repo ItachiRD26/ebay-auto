@@ -299,7 +299,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
               )}
               {!editing && (
                 <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
-                  {publishing ? "Reintentando..." : "🔄 Retry without editing"}
+                  {publishing ? "Reintentando..." : "🔄 Retry"}
                 </button>
               )}
             </div>

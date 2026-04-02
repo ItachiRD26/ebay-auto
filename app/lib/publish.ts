@@ -138,7 +138,12 @@ Return ONLY valid JSON: {"aspects": {"field": ["truncated value"]}}`;
 // Known verified leaf category IDs — tested against Trading API
 function getLeafCategoryByTitle(title: string): string {
   const t = title.toLowerCase();
-  if (t.includes("pet") || t.includes("dog") || t.includes("cat") || t.includes("puppy") || t.includes("kitten")) return "117426"; // Dog Beds
+  // Pet — be specific before generic
+  if ((t.includes("dog") || t.includes("pet") || t.includes("puppy")) && (t.includes("collar") || t.includes("leash") || t.includes("harness") || t.includes("chain"))) return "66862";  // Dog Collars & Tags
+  if ((t.includes("cat") || t.includes("kitten")) && (t.includes("collar") || t.includes("harness"))) return "20748"; // Cat Collars & Tags
+  if (t.includes("collar") || t.includes("leash") || t.includes("harness")) return "66862"; // Dog Collars & Tags (generic)
+  if (t.includes("pet") || t.includes("dog") || t.includes("puppy")) return "20742"; // Dog Supplies (leaf)
+  if (t.includes("cat") || t.includes("kitten")) return "20750"; // Cat Supplies (leaf)
   if (t.includes("adapter") || t.includes("converter") || t.includes("plug"))  return "139762"; // Outlet Adapters
   if (t.includes("phone stand") || t.includes("phone holder") || t.includes("phone mount")) return "116458"; // Phone Mounts
   if (t.includes("car") || t.includes("auto") || t.includes("vehicle"))        return "179690"; // Car Care
@@ -280,30 +285,17 @@ async function addFixedPriceItem(product: {
     : new Set<string>();
   const specificsXml = Object.entries(aspects).filter(([name]) => !variationDimensions.has(name.toLowerCase())).map(([name, values]) => values.map(v => `<NameValueList><Name>${escXml(name)}</Name><Value>${escXml(v)}</Value></NameValueList>`).join("")).join("");
   // ── Sanitize description per eBay Trading API rules ─────────────────────────
-  // 1. Strip all HTML tags (no active content allowed)
-  // 2. Remove non-ASCII chars (Chinese, special chars that trigger policy filter)
-  // 3. Remove HTTP links (must be HTTPS — but we strip all links from desc to be safe)
-  // 4. Remove known trigger patterns: brand names, medical claims, adult terms
-  // 5. Limit to 500 chars
-  const stripProblematic = (text: string): string => {
-    return text
-      .replace(/<[^>]+>/g, " ")                           // strip HTML tags
-      .replace(/https?:\/\/\S+/gi, "")                    // strip all URLs
-      .replace(/[^ -~]/g, "")                       // strip non-ASCII
-      .replace(/(cure|treat|heal|diagnos|medic|FDA|prescription|drug|narcotic|weapon|gun|ammo|counterfeit|replica|fake|copyright|trademark|brand)/gi, "") // policy triggers
-      .replace(/(sexy|adult|xxx|porn|nude|erotic|fetish|explicit)/gi, "") // adult triggers
-      .replace(/\s{2,}/g, " ")
-      .trim();
-  };
+  const stripProblematic = (text: string): string =>
+    text.replace(/<[^>]+>/g, " ").replace(/https?:\/\/\S+/gi, "").replace(/[^\x20-\x7E]/g, "")
+        .replace(/\b(cure|treat|heal|diagnos|medic|FDA|prescription|drug|narcotic|weapon|gun|ammo|counterfeit|replica|fake|copyright|trademark|brand)\b/gi, "")
+        .replace(/\b(sexy|adult|xxx|porn|nude|erotic|fetish|explicit)\b/gi, "")
+        .replace(/\s{2,}/g, " ").trim();
 
-  let safeDesc = stripProblematic(product.description || product.title).slice(0, 500);
-
-  // If description is too short or empty after stripping, generate a neutral fallback
-  if (safeDesc.length < 20) {
-    const titleWords = product.title.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-    safeDesc = `High-quality ${titleWords.slice(0, 60)}. Durable and practical design for everyday use. Easy to use and maintain. Ships worldwide with tracking.`;
-  }
-  console.log(`[publish] safeDesc preview: "${safeDesc.slice(0,100)}"`);
+  const strippedRawDesc = stripProblematic(product.description || "");
+  // If description is empty (CN image-based listing), use precomputed description or title fallback
+  const safeDesc = strippedRawDesc.length >= 30
+    ? strippedRawDesc.slice(0, 500)
+    : `${product.title.replace(/[^\x20-\x7E]/g, " ").trim().slice(0, 60)}. Durable and practical for everyday use. Fast shipping with tracking.`;
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
@@ -515,6 +507,30 @@ export async function publishProductById(productId: string, userToken: string, u
   }
 
   let itemId: string;
+  // If CN description is image-based, generate from aspects NOW while we have refAspects
+  const rawCNDesc = (product.description || "").replace(/<[^>]+>/g, " ").replace(/[^ -~]/g, "").trim();
+  if (rawCNDesc.length < 30 && Object.keys(refAspects).length > 0 && !wasImproper) {
+    const aspectsSummary = Object.entries(refAspects)
+      .filter(([k]) => !["Brand", "MPN", "Item Length", "Item Width", "Item Height"].includes(k))
+      .slice(0, 8).map(([k, v]) => `${k}: ${(v as string[]).join(", ")}`).join("; ");
+    try {
+      const descRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 200,
+          messages: [{ role: "user", content: `Write a 2-3 sentence eBay product description for: "${publishTitle}". Specs: ${aspectsSummary}. Rules: professional, highlight features/benefits, NO brand names, NO medical claims, NO adult content, NO URLs, plain text only. Return ONLY the description.` }] }),
+      });
+      if (descRes.ok) {
+        const dd = await descRes.json();
+        const gen = (dd.content?.[0]?.text ?? "").trim();
+        if (gen.length > 20) {
+          publishDesc = gen.replace(/<[^>]+>/g, " ").replace(/[^ -~]/g, "").replace(/  +/g, " ").trim();
+          console.log(`[publish] 📝 Description from aspects (CN image-based listing): "${publishDesc.slice(0, 60)}"`);
+        }
+      }
+    } catch { /* use existing publishDesc */ }
+  }
+
   const rawCatId    = refCategoryId || getLeafCategoryByTitle(product.title);
   let publishCatId  = await validateAndFixCategory(rawCatId, product.title);
   let publishAspects = { ...refAspects };
