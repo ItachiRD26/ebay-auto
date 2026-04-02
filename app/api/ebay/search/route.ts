@@ -108,13 +108,25 @@ interface PricingResult {
 }
 
 function calcPricing(item: Record<string, unknown>): PricingResult {
-  const ebayRefPrice     = parseFloat((item.price as { value: string })?.value ?? "0");
+  // For variation products, item.price = the cheapest variant ("starting from" price)
+  // priceRange gives us min and max — we use min as the base, which is item.price
+  const priceRange    = item.priceRange as { minimum?: { value: string }; maximum?: { value: string } } | undefined;
+  const rawPrice      = (item.price as { value: string })?.value ?? "0";
+  const minRefPrice   = parseFloat(priceRange?.minimum?.value ?? rawPrice);
+  const maxRefPrice   = parseFloat(priceRange?.maximum?.value ?? rawPrice);
+
+  const ebayRefPrice     = minRefPrice;  // use MIN variant as base for filter + pricing
   const ebayShippingCost = getShippingCost(item);
   const totalMarketCost  = ebayRefPrice + ebayShippingCost;
 
-  // 6% markup over total market cost (covers eBay fees + margin)
+  // 6% markup over min variant price — each variant scales proportionally in publish.ts
   const suggestedSellingPrice = parseFloat((totalMarketCost * 1.06).toFixed(2));
   const priceFloor = CONFIG.EPROLO_SHIP_AVG + 2;
+
+  if (maxRefPrice > minRefPrice) {
+    console.log(`   [pricing] Variation product: min=$${minRefPrice} max=$${maxRefPrice} → base=$${suggestedSellingPrice}`);
+  }
+
   return { ebayRefPrice, ebayShippingCost, totalMarketCost, suggestedSellingPrice, priceFloor };
 }
 
