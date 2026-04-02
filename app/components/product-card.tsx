@@ -8,10 +8,11 @@ interface Props {
   onApprove: () => void;
   onReject: () => void;
   onPublish: () => void;
+  onForcePublish?: () => void;
   onUpdate: (updates: Partial<QueueProduct>) => void;
 }
 
-export default function ProductCard({ product, onApprove, onReject, onPublish, onUpdate }: Props) {
+export default function ProductCard({ product, onApprove, onReject, onPublish, onForcePublish, onUpdate }: Props) {
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(product.title ?? "");
   const [editCategoryId, setEditCategoryId] = useState(product.categoryId ?? "");
@@ -21,7 +22,8 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   const [stock, setStock] = useState(product.stock?.toString() ?? "10");
   const [currentImg, setCurrentImg] = useState(0);
   const [publishing, setPublishing] = useState(false);
-  const [delisting, setDelisting] = useState(false);
+  const [delisting, setDelisting]           = useState(false);
+  const [showRejectConfirm, setShowRejectConfirm] = useState(false);
 
   const sellingPrice = parseFloat(price) || 0;
   const costPrice = parseFloat(eproloPrice) || 0;
@@ -34,6 +36,15 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
     if (editCategoryId && editCategoryId !== product.categoryId) onUpdate({ categoryId: editCategoryId });
     onUpdate({ suggestedSellingPrice: sellingPrice, eproloPrice: costPrice || null, description, stock: parseInt(stock) || 10, margin, marginPercent: marginPct ? parseFloat(marginPct) : null });
     setEditing(false);
+  };
+
+  const handleForcePublish = async () => {
+    setPublishing(true);
+    try {
+      await onForcePublish?.();
+    } finally {
+      setPublishing(false);
+    }
   };
 
   const handleDelist = async () => {
@@ -168,7 +179,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                 {editing ? "✕" : "✏"}
               </button>
               {editing && <button className="btn btn-icon btn-save" onClick={handleSave} title="Save changes">💾</button>}
-              <button className="btn btn-icon btn-reject" onClick={onReject} title="Move to rejected">✕</button>
+              <button className="btn btn-icon btn-reject" onClick={() => setShowRejectConfirm(true)} title="Move to rejected">✕</button>
               <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
                 {publishing ? "Publishing..." : "🚀 Publish to eBay"}
               </button>
@@ -187,9 +198,21 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
           {product.status === "failed" && (
             <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem" }}>
               <p className="fail-reason">⚠️ {product.failReason ?? "Error desconocido"}</p>
-              <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ width: "100%" }}>
-                {editing ? "✕ Close editor" : "✏ Edit & retry"}
-              </button>
+              <div style={{ display: "flex", gap: "0.4rem" }}>
+                <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ flex: 1 }}>
+                  {editing ? "✕ Close" : "✏ Edit & retry"}
+                </button>
+                {(product as QueueProduct & { tooManyVariations?: boolean }).tooManyVariations && (
+                  <button
+                    onClick={handleForcePublish}
+                    disabled={publishing}
+                    style={{ flexShrink: 0, padding: "0.5rem 0.85rem", background: "linear-gradient(135deg, #7c3aed, #6d28d9)", color: "#fff", border: "none", borderRadius: 7, fontWeight: 600, fontSize: "0.78rem", cursor: "pointer", whiteSpace: "nowrap" }}
+                    title="Publish with the cheapest variants only (trimmed to your max)"
+                  >
+                    {publishing ? "Publishing..." : "⚡ List anyway"}
+                  </button>
+                )}
+              </div>
               {editing && (
                 <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem", padding:"0.75rem", background:"#080810", borderRadius:"8px", border:"1px solid #1e2235" }}>
                   <label className="field-label">Título (max 80 chars)</label>

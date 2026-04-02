@@ -8,7 +8,7 @@ interface ReferenceItemData { title: string; description: string; categoryId: st
 export async function generateTitleAndDescription(title: string, aspects: Record<string, string[]>): Promise<{ title: string; description: string }> {
   try {
     const aspectsText = Object.entries(aspects).slice(0, 8).map(([k, v]) => `${k}: ${v.join(", ")}`).join("\n");
-    const prompt = `You are an eBay listing writer. Given a product title and details, return ONLY valid JSON.\n\nProduct title: ${title}\n${aspectsText ? `Details:\n${aspectsText}` : ""}\n\nReturn exactly this JSON (no markdown, no extra text):\n{"title":"rewritten title here","description":"3-4 sentence description here"}\n\nTitle rules: keep core product name + features, remove brand names, max 80 chars, do NOT copy original exactly.\nDescription rules: professional tone, highlight features/benefits, NO dropshipping/wholesale/supplier mentions, plain text, under 150 words.`;
+    const prompt = `You are an eBay listing writer. Given a product title and details, return ONLY valid JSON.\n\nProduct title: ${title}\n${aspectsText ? `Details:\n${aspectsText}` : ""}\n\nReturn exactly this JSON (no markdown, no extra text):\n{"title":"rewritten title here","description":"3-4 sentence description here"}\n\nTitle rules:\n- Keep core product name + key features\n- Remove ALL brand names, celebrity names, trademarked terms\n- Remove Chinese characters or non-English text\n- Max 80 chars\n- Do NOT copy original title exactly\n- No HTML, no URLs\n\nDescription rules:\n- Professional tone only\n- Highlight features and practical benefits\n- NO brand names, NO medical/health claims, NO adult content\n- NO dropshipping/supplier/wholesale mentions\n- NO URLs or external links\n- Plain text only, no HTML\n- Under 150 words`;
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -64,12 +64,24 @@ async function autoFixWithClaude(errorMsg: string, product: { title: string; des
 
     if (isImproper) {
       // Fully rewrite title and description to be eBay-safe
-      const cleanTitle = product.title.replace(/[^\w\s,\-()]/g, "").slice(0, 75).trim();
+      // Strip everything problematic from title before sending to Claude
+      const cleanTitle = product.title
+        .replace(/[一-鿿　-〿＀-￯]/g, "") // strip Chinese/CJK
+        .replace(/[^\w\s,\-()&]/g, " ")                              // keep safe chars only
+        .replace(/\s{2,}/g, " ")
+        .trim()
+        .slice(0, 75);
       prompt = `You are an eBay listing writer. Rewrite this product for eBay compliance.
 Product: "${product.title}"
-Rules: professional tone, highlight features and benefits only, no brand names, no Chinese text, no medical/health claims, no adult content, no weapons, no misleading terms.
+Clean base title (use as starting point): "${cleanTitle}"
+Rules:
+- Remove ALL brand names, celebrity names, trademarked terms (Nike, Apple, etc.)
+- Remove any Chinese or non-English characters
+- No medical claims, no adult content, no weapons references
+- Professional tone, highlight practical features and benefits only
+- Title max 80 chars, description 2-3 sentences, plain text, no HTML, no URLs
 Return ONLY this JSON (no markdown):
-{"title":"${cleanTitle}","description":"2-3 sentence professional product description here"}`;
+{"title":"rewritten safe title here","description":"2-3 sentence professional product description here"}`;
     } else if (isMissing) {
       // Extract the specific missing field from the error message
       const styleMatch    = errorMsg.match(/Style/i);
@@ -267,7 +279,30 @@ async function addFixedPriceItem(product: {
     ? new Set(Object.keys(varData.specificsSet).map(k => k.toLowerCase()))
     : new Set<string>();
   const specificsXml = Object.entries(aspects).filter(([name]) => !variationDimensions.has(name.toLowerCase())).map(([name, values]) => values.map(v => `<NameValueList><Name>${escXml(name)}</Name><Value>${escXml(v)}</Value></NameValueList>`).join("")).join("");
-  const safeDesc = (product.description || product.title).replace(/<[^>]+>/g, " ").replace(/[^\x20-\x7E]/g, "").replace(/  +/g, " ").slice(0, 500).trim();
+  // ── Sanitize description per eBay Trading API rules ─────────────────────────
+  // 1. Strip all HTML tags (no active content allowed)
+  // 2. Remove non-ASCII chars (Chinese, special chars that trigger policy filter)
+  // 3. Remove HTTP links (must be HTTPS — but we strip all links from desc to be safe)
+  // 4. Remove known trigger patterns: brand names, medical claims, adult terms
+  // 5. Limit to 500 chars
+  const stripProblematic = (text: string): string => {
+    return text
+      .replace(/<[^>]+>/g, " ")                           // strip HTML tags
+      .replace(/https?:\/\/\S+/gi, "")                    // strip all URLs
+      .replace(/[^ -~]/g, "")                       // strip non-ASCII
+      .replace(/(cure|treat|heal|diagnos|medic|FDA|prescription|drug|narcotic|weapon|gun|ammo|counterfeit|replica|fake|copyright|trademark|brand)/gi, "") // policy triggers
+      .replace(/(sexy|adult|xxx|porn|nude|erotic|fetish|explicit)/gi, "") // adult triggers
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  };
+
+  let safeDesc = stripProblematic(product.description || product.title).slice(0, 500);
+
+  // If description is too short or empty after stripping, generate a neutral fallback
+  if (safeDesc.length < 20) {
+    const titleWords = product.title.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+    safeDesc = `High-quality ${titleWords.slice(0, 60)}. Durable and practical design for everyday use. Easy to use and maintain. Ships worldwide with tracking.`;
+  }
   console.log(`[publish] safeDesc preview: "${safeDesc.slice(0,100)}"`);
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
@@ -360,7 +395,33 @@ async function getStorePolicies(userId: string, storeId: string): Promise<{
 }
 
 
-export async function publishProductById(productId: string, userToken: string, userId: string, storeId?: string): Promise<{ listingId: string }> {
+// ─── Validate category is a leaf — fix it if not ─────────────────────────────
+async function validateAndFixCategory(categoryId: string, title: string): Promise<string> {
+  try {
+    const appToken = await (await import("@/lib/ebay")).getAppToken();
+    // getItemAspectsForCategory returns 200 only for valid leaf categories
+    const res = await fetch(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${categoryId}`,
+      { headers: { Authorization: `Bearer ${appToken}` }, signal: AbortSignal.timeout(6000) }
+    );
+    if (res.ok) {
+      console.log(`[category] ${categoryId} ✅ confirmed leaf`);
+      return categoryId;
+    }
+    // Not a leaf — get fresh suggestion
+    console.log(`[category] ${categoryId} ❌ not a leaf — fetching suggestion for "${title.slice(0,40)}"`);
+    const { getCategoryIdForTitle } = await import("@/lib/ebay");
+    const fresh = await getCategoryIdForTitle(title);
+    if (fresh) {
+      console.log(`[category] Fresh leaf: ${fresh}`);
+      return fresh;
+    }
+  } catch (e) { console.warn("[category] validation error:", e); }
+  return categoryId; // fallback: return original and let eBay error handle it
+}
+
+
+export async function publishProductById(productId: string, userToken: string, userId: string, storeId?: string, forceVariations = false): Promise<{ listingId: string }> {
   const docRef = queueCol(userId).doc(productId);
   const doc = await docRef.get();
   if (!doc.exists) throw new Error("Product not found");
@@ -403,7 +464,20 @@ export async function publishProductById(productId: string, userToken: string, u
       refData.imageUrls.forEach((u: string) => { if (!merged.includes(u)) merged.push(u); });
       refImages = merged.slice(0, 12);
       refVariations = (refData as unknown as ReferenceItemData).variations ?? null;
-      if (refVariations && refVariations.variations.length > MAX_VARIATIONS) throw new Error(`Demasiadas variantes (${refVariations.variations.length}/${MAX_VARIATIONS} máx) — se omite para no agotar saldo`);
+      if (refVariations && refVariations.variations.length > MAX_VARIATIONS) {
+        if (forceVariations) {
+          // Trim to MAX_VARIATIONS keeping the cheapest variants first (sorted by refPrice asc)
+          refVariations = {
+            ...refVariations,
+            variations: [...refVariations.variations]
+              .sort((a, b) => a.refPrice - b.refPrice)
+              .slice(0, MAX_VARIATIONS),
+          };
+          console.log(`[publish] ⚡ forceVariations=true — trimmed to ${MAX_VARIATIONS} cheapest variants`);
+        } else {
+          throw new Error(`TOO_MANY_VARIATIONS:${refVariations.variations.length}:${MAX_VARIATIONS}`);
+        }
+      }
       const varInfo = refVariations ? ` | ${refVariations.variations.length} variantes (${Object.keys(refVariations.specificsSet).join(", ")})` : " | sin variantes";
       console.log(`[publish] ${productId} — ${Object.keys(refAspects).length} aspects, ${refImages.length} images${varInfo}`);
     }
@@ -415,7 +489,8 @@ export async function publishProductById(productId: string, userToken: string, u
   let itemId: string;
   let publishTitle = cleanTitle;
   let publishDesc  = description;
-  let publishCatId = refCategoryId || getLeafCategoryByTitle(product.title);
+  const rawCatId    = refCategoryId || getLeafCategoryByTitle(product.title);
+  let publishCatId  = await validateAndFixCategory(rawCatId, product.title);
   let publishAspects = { ...refAspects };
 
   const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters", "Style", "Department", "Occasion", "Sleeve"];
@@ -533,6 +608,13 @@ async function applyPromotedListing(listingId: string, userToken: string): Promi
 }
 
 export async function markPublishFailed(productId: string, reason: string, userId: string): Promise<void> {
-  await queueCol(userId).doc(productId).update({ status: "failed", failReason: reason, updatedAt: Date.now() });
+  const isTooManyVariants = reason.startsWith("TOO_MANY_VARIATIONS:");
+  const update: Record<string, unknown> = { status: "failed", failReason: reason, updatedAt: Date.now() };
+  if (isTooManyVariants) {
+    const [, count, max] = reason.split(":");
+    update.failReason = `Too many variations (${count}/${max} max) — click "List anyway" to publish with the ${max} cheapest`;
+    update.tooManyVariations = true;
+  }
+  await queueCol(userId).doc(productId).update(update);
   console.log(`[publish] ⚠️ ${productId} → failed: ${reason}`);
 }

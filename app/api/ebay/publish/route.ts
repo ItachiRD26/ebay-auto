@@ -4,7 +4,7 @@ import { publishProductById, markPublishFailed } from "@/lib/publish";
 
 export async function POST(req: NextRequest) {
   try {
-    const { productId, storeId, userId } = await req.json();
+    const { productId, storeId, userId, forceVariations = false } = await req.json();
     if (!productId) return NextResponse.json({ error: "productId required" }, { status: 400 });
     if (!storeId)   return NextResponse.json({ error: "storeId required" },   { status: 400 });
     if (!userId)    return NextResponse.json({ error: "userId required" },    { status: 400 });
@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     const userToken = tokenDoc.data()!.access_token;
 
     try {
-      const { listingId } = await publishProductById(productId, userToken, userId, storeId);
+      const { listingId } = await publishProductById(productId, userToken, userId, storeId, forceVariations);
       return NextResponse.json({ success: true, listingId });
     } catch (publishError: unknown) {
       const reason = publishError instanceof Error ? publishError.message : String(publishError);

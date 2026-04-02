@@ -148,6 +148,31 @@ async function getLeafChildId(categoryId: string, token: string): Promise<string
   } catch { return null; }
 }
 
+
+// ─── Validate that a category is a leaf using getItemAspectsForCategory ────────
+// If it returns aspects, it's a leaf. If it fails, it's not.
+const _leafCache = new Map<string, boolean>();
+
+async function isLeafCategory(categoryId: string, token: string): Promise<boolean> {
+  if (_leafCache.has(categoryId)) return _leafCache.get(categoryId)!;
+  try {
+    const res = await fetch(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${categoryId}`,
+      { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, signal: AbortSignal.timeout(6000) }
+    );
+    // 200 = leaf with aspects, 400/404 = not a leaf or invalid
+    const isLeaf = res.ok;
+    _leafCache.set(categoryId, isLeaf);
+    return isLeaf;
+  } catch { return false; }
+}
+
+// Force-drill into a leaf using getCategorySubtree
+async function forceLeaf(categoryId: string, token: string): Promise<string> {
+  const leaf = await getLeafChildId(categoryId, token);
+  return leaf ?? categoryId;
+}
+
 export async function getCategoryIdForTitle(title: string): Promise<string | null> {
   const cacheKey = title.toLowerCase().slice(0, 40);
   if (_taxonomyCache.has(cacheKey)) return _taxonomyCache.get(cacheKey)!;
@@ -163,9 +188,29 @@ export async function getCategoryIdForTitle(title: string): Promise<string | nul
     };
     const suggestions = (data.categorySuggestions ?? []).sort((a, b) => (b.categoryTreeNodeLevel ?? 0) - (a.categoryTreeNodeLevel ?? 0));
     if (!suggestions.length) return null;
+
+    // Try each suggestion until we find a confirmed leaf
+    for (const suggestion of suggestions.slice(0, 5)) {
+      const candidateId = suggestion.category.categoryId;
+      // Check if it's already a leaf
+      if (await isLeafCategory(candidateId, token)) {
+        console.log(`[taxonomy] "${title.slice(0,40)}" → ${candidateId} (${suggestion.category.categoryName}) ✅ leaf confirmed`);
+        _taxonomyCache.set(cacheKey, candidateId);
+        return candidateId;
+      }
+      // Drill down to find leaf child
+      const leafId = await getLeafChildId(candidateId, token);
+      if (leafId && await isLeafCategory(leafId, token)) {
+        console.log(`[taxonomy] "${title.slice(0,40)}" → ${candidateId} drilled to leaf ${leafId}`);
+        _taxonomyCache.set(cacheKey, leafId);
+        return leafId;
+      }
+    }
+
+    // Fallback: force drill the best suggestion
     const best = suggestions[0];
-    const leafId = await getLeafChildId(best.category.categoryId, token);
-    const finalId = leafId ?? best.category.categoryId;
+    const finalId = await forceLeaf(best.category.categoryId, token);
+    console.log(`[taxonomy] "${title.slice(0,40)}" → ${finalId} (forced leaf)`);
     _taxonomyCache.set(cacheKey, finalId);
     return finalId;
   } catch (e) { console.warn("[taxonomy] Error:", e); return null; }

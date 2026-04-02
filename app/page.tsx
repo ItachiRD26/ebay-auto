@@ -389,7 +389,21 @@ export default function Dashboard() {
     }
   };
 
-  const handleImport = async () => {
+  const handleForcePublish = async (product: QueueProduct) => {
+    if (!requireStore()) return;
+    for (const storeId of [selectedStoreId]) {
+      const res  = await fetch("/api/ebay/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: product.id, storeId, userId: uid, forceVariations: true }),
+      });
+      const data = await res.json();
+      if (data.error) toast("❌ " + data.error, "err");
+      else toast(`✅ Listed with trimmed variants`, "ok");
+    }
+  };
+
+    const handleImport = async () => {
     if (!requireStore()) return;
     const urls = urlInput.split("\n").map(u => u.trim()).filter(Boolean);
     if (!urls.length) { toast("Pega al menos una URL", "err"); return; }
@@ -877,6 +891,7 @@ export default function Dashboard() {
                     onReject={() => patch(p.id, { status: "rejected" })}
                     onPublish={() => openPublishModal(p)}
                     onUpdate={updates => patch(p.id, updates)}
+                    onForcePublish={() => handleForcePublish(p)}
                   />
                 ))
               )}
