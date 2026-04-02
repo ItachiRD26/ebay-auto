@@ -148,7 +148,14 @@ function getLeafCategoryByTitle(title: string): string {
 }
 
 function escXml(s: string): string {
+  // Full XML escape for attributes and URLs
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
+}
+
+function escVal(s: string): string {
+  // For element content (Value, Name tags) — only escape &, <, >
+  // eBay displays &quot; literally in variation selectors — use raw " instead
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
 async function addFixedPriceItem(product: {
@@ -229,17 +236,26 @@ async function addFixedPriceItem(product: {
   if (varData && varData.variations.length > 0) {
     hasVariations = true;
     const refPrices = varData.variations.map((v: VariationSpec) => v.refPrice).filter((p: number) => p > 0);
-    const refMin = refPrices.length > 0 ? Math.min(...refPrices) : 0;
-    const basePrice = product.price;
+    const refMin  = refPrices.length > 0 ? Math.min(...refPrices) : 0;
+    const refMax  = refPrices.length > 0 ? Math.max(...refPrices) : 0;
+    // basePrice = our price for the CHEAPEST variant (same as suggestedSellingPrice)
+    // markupRatio = how much above refMin we want to list (e.g. 1.06 = 6% above ref min)
+    const basePrice   = product.price;  // already calculated as refMin * markupRatio
+    const appliedRatio = refMin > 0 ? basePrice / refMin : (product.markupRatio ?? 1.06);
+    console.log(`[publish] Variation pricing: refMin=$${refMin} refMax=$${refMax} basePrice=$${basePrice} ratio=${appliedRatio.toFixed(3)}`);
     const variationItems = varData.variations.map((v: VariationSpec) => {
-      const varPrice = (refMin > 0 && v.refPrice > 0) ? Math.max(basePrice, +(basePrice * (v.refPrice / refMin)).toFixed(2)) : basePrice;
+      // Scale each variant by the same ratio applied to the min variant
+      // e.g. ref variant = $20, ref min = $10 → our variant = $10*ratio * (20/10) = ratio*$20
+      const varPrice = (refMin > 0 && v.refPrice > 0)
+        ? +Math.max(basePrice, (v.refPrice * appliedRatio)).toFixed(2)
+        : basePrice;
       const varSpecificsXml = Object.entries(v.specifics).map(([name, val]) => `<NameValueList><Name>${escXml(name)}</Name><Value>${escXml(val)}</Value></NameValueList>`).join("");
       return `<Variation><SKU>${escXml(Object.values(v.specifics).map((x: unknown) => String(x)).join("-"))}</SKU><StartPrice>${varPrice}</StartPrice><Quantity>${product.stock}</Quantity><VariationSpecifics>${varSpecificsXml}</VariationSpecifics></Variation>`;
     }).join("");
     const setXml = Object.entries(varData.specificsSet).map(([name, vals]) => { const valsXml = (vals as string[]).map((v: string) => `<Value>${escXml(v)}</Value>`).join(""); return `<NameValueList><Name>${escXml(name)}</Name>${valsXml}</NameValueList>`; }).join("");
     let picturesBlockXml = "";
     if (varData.pictureDimension && Object.keys(varData.picturesByVariant).length > 0) {
-      const pictureSets = Object.entries(varData.picturesByVariant).map(([value, urls]) => { const urlsXml = (urls as string[]).slice(0, 6).map((u: string) => `<PictureURL>${escXml(u)}</PictureURL>`).join(""); return `<VariationSpecificPictureSet><VariationSpecificValue>${escXml(value)}</VariationSpecificValue>${urlsXml}</VariationSpecificPictureSet>`; }).join("");
+      const pictureSets = Object.entries(varData.picturesByVariant).map(([value, urls]) => { const urlsXml = (urls as string[]).slice(0, 6).map((u: string) => `<PictureURL>${escXml(u)}</PictureURL>`).join(""); return `<VariationSpecificPictureSet><VariationSpecificValue>${escVal(value)}</VariationSpecificValue>${urlsXml}</VariationSpecificPictureSet>`; }).join("");
       picturesBlockXml = `<Pictures><VariationSpecificName>${escXml(varData.pictureDimension)}</VariationSpecificName>${pictureSets}</Pictures>`;
       console.log(`[publish] 🖼 Variation pictures mapped: ${Object.keys(varData.picturesByVariant).length} values for "${varData.pictureDimension}"`);
     }
