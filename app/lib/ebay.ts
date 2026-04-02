@@ -85,13 +85,35 @@ export async function getUserToken(storeId: string): Promise<string> {
 }
 
 // ─── Browse API: Keyword Search ───────────────────────────────────────────────
+// Sort orders eBay supports — we rotate to explore different result pages
+const SORT_ORDERS = ["bestMatch", "newlyListed", "price", "-price", "distance"] as const;
+
+// Track last-used sort+offset per keyword to avoid repeat results
+const _searchState = new Map<string, { sortIdx: number; offset: number }>();
+
 export async function searchProducts(keywords: string, limit = 200) {
   const token = await getAppToken();
+
+  // Get or init rotation state for this keyword
+  const key = keywords.toLowerCase().trim();
+  const prev = _searchState.get(key) ?? { sortIdx: 0, offset: 0 };
+
+  // Advance: cycle through sort orders, then bump offset
+  let { sortIdx, offset } = prev;
+  const sort = SORT_ORDERS[sortIdx % SORT_ORDERS.length];
+
+  // Move to next sort on next call — after all sorts tried, bump offset by 200
+  const nextSortIdx = (sortIdx + 1) % SORT_ORDERS.length;
+  const nextOffset  = nextSortIdx === 0 ? (offset + 200) % 1000 : offset;
+  _searchState.set(key, { sortIdx: nextSortIdx, offset: nextOffset });
+
+  console.log(`[search] "${key}" sort=${sort} offset=${offset}`);
 
   const params = new URLSearchParams({
     q: keywords,
     limit: Math.min(limit, 200).toString(),
-    sort: "bestMatch",
+    sort,
+    offset: offset.toString(),
     filter: "buyingOptions:{FIXED_PRICE},itemLocationCountry:CN,conditions:{NEW}",
     fieldgroups: "EXTENDED",
   });
