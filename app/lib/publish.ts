@@ -160,17 +160,18 @@ function getLeafCategoryByTitle(title: string): string {
   if (t.includes("vase") || t.includes("planter"))                              return "116656"; // Vases
   if (t.includes("clock"))                                                       return "3815";   // Clocks
   if (t.includes("frame"))                                                       return "92074";  // Frames
-  // ── Footwear — must come BEFORE generic "shoe" → organizer mapping ─────────
-  if (t.includes("loafer") || t.includes("mule") || t.includes("slipper") || t.includes("flat") && t.includes("men")) return "93427";  // Men's Casual Shoes
-  if (t.includes("sneaker") || t.includes("trainer") || (t.includes("running") && t.includes("shoe"))) return "15709";   // Athletic Shoes
-  if (t.includes("boot") && (t.includes("men") || t.includes("male")))          return "11498";   // Men's Boots
-  if (t.includes("boot") && (t.includes("women") || t.includes("ladies")))      return "55793";   // Women's Boots
-  if (t.includes("heel") || t.includes("pump") || t.includes("stiletto"))       return "55791";   // Women's Heels
-  if (t.includes("sandal") || t.includes("flip flop") || t.includes("slides"))  return "11504";   // Sandals & Flip Flops
-  if (t.includes("dress shoe") || t.includes("oxford") || t.includes("derby"))  return "93430";   // Men's Dress Shoes
-  if ((t.includes("shoe") || t.includes("footwear")) && (t.includes("men") || t.includes("male") || t.includes("boy"))) return "93427"; // Men's Casual Shoes
-  if ((t.includes("shoe") || t.includes("footwear")) && (t.includes("women") || t.includes("ladies") || t.includes("girl"))) return "55790"; // Women's Athletic Shoes
-  if (t.includes("shoe") && !t.includes("organizer") && !t.includes("rack") && !t.includes("storage")) return "93427"; // Men's Casual Shoes (default)
+  // ── Footwear — verified Trading API leaf category IDs ─────────────────────
+  if (t.includes("loafer") || t.includes("mule") || t.includes("slip-on") || t.includes("slip on")) return "45333"; // Men's Loafers & Slip-Ons (leaf)
+  if (t.includes("slipper"))                                                                          return "63867"; // Men's Slippers (leaf)
+  if (t.includes("sneaker") || t.includes("trainer"))                                                return "15709"; // Men's Sneakers (leaf)
+  if (t.includes("running") && (t.includes("shoe") || t.includes("footwear")))                      return "15709"; // Men's Sneakers (leaf)
+  if (t.includes("boot") && (t.includes("women") || t.includes("ladies") || t.includes("girl")))    return "55793"; // Women's Boots (leaf)
+  if (t.includes("boot") && (t.includes("men") || t.includes("male") || t.includes("boy")))         return "11498"; // Men's Boots (leaf)
+  if (t.includes("heel") || t.includes("pump") || t.includes("stiletto") || t.includes("wedge"))    return "55791"; // Women's Heels (leaf)
+  if (t.includes("sandal") || t.includes("flip flop") || t.includes("slides") || t.includes("thong"))return "11504"; // Women's Sandals (leaf)
+  if (t.includes("oxford") || t.includes("derby") || t.includes("dress shoe") || t.includes("formal shoe")) return "57929"; // Men's Dress Shoes (leaf)
+  if ((t.includes("shoe") || t.includes("footwear")) && (t.includes("women") || t.includes("ladies"))) return "55789"; // Women's Flats (leaf)
+  if (t.includes("shoe") && !t.includes("organizer") && !t.includes("rack") && !t.includes("storage")) return "45333"; // Men's Loafers (default shoe fallback, leaf)
   if (t.includes("shoe organizer") || t.includes("shoe rack") || t.includes("shoe storage")) return "112576"; // Shoe Organizers
   return "20625"; // Kitchen Storage — default verified leaf
 }
@@ -400,33 +401,37 @@ async function getStorePolicies(userId: string, storeId: string): Promise<{
 
 // ─── Validate category is a leaf — fix it if not ─────────────────────────────
 async function validateAndFixCategory(categoryId: string, title: string): Promise<string> {
+  // Step 1: Always try local keyword mapping first — these are verified Trading API leaves
+  const localLeaf = getLeafCategoryByTitle(title);
+  if (localLeaf !== "20625") {
+    // We have a specific match — trust it over any API-returned category
+    console.log(`[category] Local keyword match: ${localLeaf} for "${title.slice(0,40)}"`);
+    return localLeaf;
+  }
+
+  // Step 2: Validate the original category via Taxonomy API
   try {
     const appToken = await (await import("@/lib/ebay")).getAppToken();
-    // getItemAspectsForCategory returns 200 only for valid leaf categories
     const res = await fetch(
       `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${categoryId}`,
       { headers: { Authorization: `Bearer ${appToken}` }, signal: AbortSignal.timeout(6000) }
     );
     if (res.ok) {
-      console.log(`[category] ${categoryId} ✅ confirmed leaf`);
+      console.log(`[category] ${categoryId} ✅ confirmed leaf (Taxonomy API)`);
       return categoryId;
     }
-    // Not a leaf — try local keyword mapping first (fast, no API call)
-    console.log(`[category] ${categoryId} ❌ not a leaf — trying local keyword mapping for "${title.slice(0,40)}"`);
-    const localLeaf = getLeafCategoryByTitle(title);
-    if (localLeaf !== "20625") { // if it's not just the generic fallback
-      console.log(`[category] Local keyword mapped to: ${localLeaf}`);
-      return localLeaf;
-    }
-    // Fallback to Taxonomy API suggestion
+    // Not a leaf per Taxonomy API — try getCategoryIdForTitle as last resort
+    console.log(`[category] ${categoryId} ❌ not a leaf — fetching fresh from Taxonomy for "${title.slice(0,40)}"`);
     const { getCategoryIdForTitle } = await import("@/lib/ebay");
     const fresh = await getCategoryIdForTitle(title);
     if (fresh) {
-      console.log(`[category] Taxonomy API leaf: ${fresh}`);
+      console.log(`[category] Taxonomy suggestion: ${fresh}`);
       return fresh;
     }
   } catch (e) { console.warn("[category] validation error:", e); }
-  return categoryId; // fallback: return original and let eBay error handle it
+
+  // Step 3: Generic fallback
+  return categoryId;
 }
 
 
