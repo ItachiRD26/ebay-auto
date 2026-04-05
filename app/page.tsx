@@ -881,14 +881,13 @@ export default function Dashboard() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                 <button onClick={() => handleScanCategory(undefined)} disabled={!!scanningCategory}
                   style={{ padding: "0.38rem 0.9rem", background: "var(--purple)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer", opacity: scanningCategory ? 0.5 : 1 }}>
-                  {scanningCategory === "all" ? "⏳ Scanning..." : "🔎 Scan all"}
+                  {scanningCategory ? "⏳ Scanning..." : "🔎 Scan for CN sellers"}
                 </button>
-                {CATEGORIES.map(cat => (
-                  <button key={cat} onClick={() => handleScanCategory(cat)} disabled={!!scanningCategory}
-                    style={{ padding: "0.35rem 0.8rem", background: scanningCategory === cat ? "var(--purple)" : "var(--bg3)", color: scanningCategory === cat ? "#fff" : "var(--text2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.75rem", cursor: "pointer" }}>
-                    {scanningCategory === cat ? "⏳..." : cat}
-                  </button>
-                ))}
+                {scanningCategory && (
+                  <span style={{ fontSize: "0.75rem", color: "var(--text3)", alignSelf: "center" }}>
+                    Sampling listings, checking sales signals and listing counts...
+                  </span>
+                )}
               </div>
 
               {savedSellers.length === 0 && !scanningCategory && (
@@ -916,6 +915,11 @@ export default function Dashboard() {
                             <span style={{ fontSize: "0.72rem", background: "rgba(16,185,129,0.12)", color: "var(--green)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
                               {s.totalListings.toLocaleString()} listings
                             </span>
+                            {(s as { soldSignals?: number }).soldSignals && (
+                              <span style={{ fontSize: "0.72rem", background: "rgba(59,130,246,0.1)", color: "var(--blue)", border: "1px solid rgba(59,130,246,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
+                                🔥 {(s as { soldSignals?: number }).soldSignals} sold signals
+                              </span>
+                            )}
                             <button onClick={() => handleDeleteSeller(s.username)}
                               style={{ fontSize: "0.72rem", padding: "0.2rem 0.5rem", background: "transparent", color: "var(--red)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", cursor: "pointer", flexShrink: 0 }}>✕</button>
                           </div>

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppToken, getUserToken } from "@/lib/ebay";
 import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS } from "@/lib/firebase";
 import { QueueProduct, Settings } from "@/types";
-import { SELLER_CATEGORIES } from "@/api/ebay/discover-sellers/route";
 
 // Flat fallback keywords if no category known
 const DEFAULT_SCAN_KEYWORDS = [
