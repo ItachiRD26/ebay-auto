@@ -797,8 +797,23 @@ export default function Dashboard() {
                   <>
                     {searchProgress.keywords.total > 1 && <span>📋 <strong style={{ color: "var(--text)" }}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>}
                     {searchProgress.keyword && <span>🔍 <strong style={{ color: "var(--text)" }}>"{searchProgress.keyword}"</strong></span>}
-                    <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed}</strong> reviewed</span>
-                    <span style={{ color: "var(--green)" }}>✅ <strong>{searchProgress.passed}</strong> passed</span>
+                    <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed}</strong></span>
+                    <span style={{ color: "var(--green)" }}>✅ <strong>{searchProgress.passed}</strong></span>
+                    {(searchProgress as unknown as Record<string,unknown>).skipReasons && (() => {
+                      const sr = ((searchProgress as unknown as Record<string, Record<string,number>>).skipReasons);
+                      return <>
+                        {sr.sales    > 0 && <span style={{ color: "var(--amber)" }}>📉 {sr.sales} low sales</span>}
+                        {sr.price    > 0 && <span style={{ color: "var(--text3)" }}>💰 {sr.price} price</span>}
+                        {sr.banned   > 0 && <span style={{ color: "var(--red)" }}>🚫 {sr.banned} IP</span>}
+                        {sr.country  > 0 && <span style={{ color: "var(--text3)" }}>🌍 {sr.country} not CN</span>}
+                        {sr.duplicate > 0 && <span style={{ color: "var(--text3)" }}>♻ {sr.duplicate} dup</span>}
+                      </>;
+                    })()}
+                    {(searchProgress as unknown as Record<string,string>).lastSkipReason && (
+                      <span style={{ color: "var(--text3)", fontStyle: "italic", fontSize: "0.72rem" }}>
+                        last: {((searchProgress as unknown as Record<string,string>).lastSkipReason).slice(0,30)}
+                      </span>
+                    )}
                   </>
                 ) : <span>Starting...</span>}
               </div>
@@ -915,14 +930,14 @@ export default function Dashboard() {
                             <span style={{ fontSize: "0.72rem", background: "rgba(16,185,129,0.12)", color: "var(--green)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
                               {s.totalListings.toLocaleString()} listings
                             </span>
-                            {(s as { topSoldQty?: number }).topSoldQty ? (
-                              <span style={{ fontSize: "0.72rem", background: "rgba(16,185,129,0.1)", color: "var(--green)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
-                                🔥 {(s as { topSoldQty?: number }).topSoldQty?.toLocaleString()} sold
+                            {(s as { uniqueQueries?: number }).uniqueQueries ? (
+                              <span style={{ fontSize: "0.72rem", background: "rgba(168,85,247,0.1)", color: "var(--purple)", border: "1px solid rgba(168,85,247,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
+                                🎯 {(s as { uniqueQueries?: number }).uniqueQueries} niches
                               </span>
                             ) : null}
-                            {(s as { categoriesFound?: string[] }).categoriesFound?.length ? (
-                              <span style={{ fontSize: "0.72rem", background: "rgba(168,85,247,0.1)", color: "var(--purple)", border: "1px solid rgba(168,85,247,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
-                                🎯 {(s as { categoriesFound?: string[] }).categoriesFound?.length} niches
+                            {(s as { appearances?: number }).appearances ? (
+                              <span style={{ fontSize: "0.72rem", background: "rgba(16,185,129,0.1)", color: "var(--green)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
+                                👁 {(s as { appearances?: number }).appearances} seen
                               </span>
                             ) : null}
                             <button onClick={() => handleDeleteSeller(s.username)}

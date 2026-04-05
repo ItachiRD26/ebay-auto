@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchProducts, getUserToken, getAppToken } from "@/lib/ebay";
 import { QueueProduct } from "@/types";
-import { resetProgress, updateProgress, endProgress } from "@/lib/search-progress";
+import { resetProgress, updateProgress, endProgress, skipProgress } from "@/lib/search-progress";
 
 // ─── Dropshipping config ──────────────────────────────────────────────────────
 const CONFIG = {
@@ -232,19 +232,6 @@ async function getSoldDataFromInsights(itemId: string, appToken: string): Promis
 async function getItemDataViaTradingAPI(numericItemId: string, storeId: string): Promise<TradingItemData> {
   const empty: TradingItemData = { soldCount: 0, estimatedSold30d: 0, listingAgeDays: 0, shipFromCountry: null };
 
-  // ── Try Marketplace Insights API first (no user token needed, real sold data) ──
-  try {
-    const appToken = await getAppToken();
-    const insights = await getSoldDataFromInsights(numericItemId, appToken);
-    if (insights) {
-      console.log(`   [insights] ✅ ${numericItemId}: ${insights.soldCount} sold | est30d: ${insights.estimatedSold30d} | country: ${insights.shipFromCountry}`);
-      return insights;
-    }
-  } catch (e) {
-    console.warn(`   [insights] failed, falling back to Trading API:`, e instanceof Error ? e.message : e);
-  }
-
-  // ── Fallback: Trading API GetItem ─────────────────────────────────────────
   try {
     if (!_tokenCache[storeId] || Date.now() - _tokenCache[storeId].fetchedAt > 60_000) {
       try {
@@ -367,18 +354,18 @@ async function processItem(
   const pricing = calcPricing(item);
 
   if (pricing.ebayRefPrice < CONFIG.MIN_PRICE || pricing.ebayRefPrice > CONFIG.MAX_PRICE) {
-    console.log(`   SKIP [precio] "${title.slice(0,50)}" $${pricing.ebayRefPrice}`);
+    skipProgress("price", `$${pricing.ebayRefPrice}`);
     return false;
   }
   if (isBannedWith(title, excluded)) {
-    console.log(`   SKIP [banned] "${title.slice(0,50)}"`);
+    skipProgress("banned", title.slice(0, 40));
     return false;
   }
 
   // ── 2. China origin check (Browse API summary) ──────────────────────────────
   const summaryCountry = (item.itemLocation as { country?: string })?.country ?? "";
   if (notChina(summaryCountry)) {
-    console.log(`   SKIP [pais] "${title.slice(0,50)}" — ${summaryCountry}`);
+    skipProgress("country", summaryCountry);
     return false;
   }
 
@@ -386,7 +373,7 @@ async function processItem(
   // Skip if condition is clearly not new
   const conditionId = (item.conditionId as string) ?? "";
   if (conditionId && !["1000","1500"].includes(conditionId)) {
-    console.log(`   SKIP [condicion] "${title.slice(0,50)}" — ${conditionId}`);
+    skipProgress("condition", conditionId);
     return false;
   }
 
@@ -395,7 +382,7 @@ async function processItem(
 
   // Confirm China origin via Trading API
   if (notChina(td.shipFromCountry)) {
-    console.log(`   SKIP [pais-trading] "${title.slice(0,50)}" — ${td.shipFromCountry}`);
+    skipProgress("country", td.shipFromCountry ?? "?");
     return false;
   }
 
@@ -409,12 +396,12 @@ async function processItem(
   console.log(`      Ventas: ${td.soldCount} total | ~${td.estimatedSold30d} est/30d | listing: ${ageLabel} | ID:${numericId}`);
 
   if (td.soldCount < minSoldTotal) {
-    console.log(`      ❌ ${td.soldCount} ventas totales < min ${minSoldTotal}`);
+    skipProgress("sales", `${td.soldCount} sold < ${minSoldTotal} min`);
     return false;
   }
 
   if (td.estimatedSold30d < minSold30d) {
-    console.log(`      ❌ ~${td.estimatedSold30d} est/30d < min ${minSold30d} — producto lento`);
+    skipProgress("sales", `~${td.estimatedSold30d}/30d < ${minSold30d} min`);
     return false;
   }
 
@@ -424,20 +411,20 @@ async function processItem(
   // Check seen_items (light collection — survives product deletion)
   const seenDoc = await seenCol(userId).doc(numericId).get();
   if (seenDoc.exists) {
-    console.log(`      ⚠️  YA VISTO (seen_items: ${(seenDoc.data() as Record<string,unknown>)?.reason ?? "?"}) `);
+    skipProgress("duplicate");
     return false;
   }
 
   // Fallback: also check queue (for items added before seen_items existed)
   const dup = await queueCol(userId).where("ebayItemId", "==", numericId).limit(1).get();
   if (!dup.empty) {
-    console.log(`      ⚠️  DUPLICADO (queue itemId)`);
+    skipProgress("duplicate");
     return false;
   }
 
   const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
   if (!titleDup.empty) {
-    console.log(`      ⚠️  DUPLICADO (título: "${normalizedTitle.slice(0, 40)}")`);
+    skipProgress("duplicate");
     return false;
   }
 
