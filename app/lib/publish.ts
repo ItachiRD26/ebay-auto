@@ -160,7 +160,18 @@ function getLeafCategoryByTitle(title: string): string {
   if (t.includes("vase") || t.includes("planter"))                              return "116656"; // Vases
   if (t.includes("clock"))                                                       return "3815";   // Clocks
   if (t.includes("frame"))                                                       return "92074";  // Frames
-  if (t.includes("shoe"))                                                        return "112576"; // Shoe Organizers
+  // ── Footwear — must come BEFORE generic "shoe" → organizer mapping ─────────
+  if (t.includes("loafer") || t.includes("mule") || t.includes("slipper") || t.includes("flat") && t.includes("men")) return "93427";  // Men's Casual Shoes
+  if (t.includes("sneaker") || t.includes("trainer") || (t.includes("running") && t.includes("shoe"))) return "15709";   // Athletic Shoes
+  if (t.includes("boot") && (t.includes("men") || t.includes("male")))          return "11498";   // Men's Boots
+  if (t.includes("boot") && (t.includes("women") || t.includes("ladies")))      return "55793";   // Women's Boots
+  if (t.includes("heel") || t.includes("pump") || t.includes("stiletto"))       return "55791";   // Women's Heels
+  if (t.includes("sandal") || t.includes("flip flop") || t.includes("slides"))  return "11504";   // Sandals & Flip Flops
+  if (t.includes("dress shoe") || t.includes("oxford") || t.includes("derby"))  return "93430";   // Men's Dress Shoes
+  if ((t.includes("shoe") || t.includes("footwear")) && (t.includes("men") || t.includes("male") || t.includes("boy"))) return "93427"; // Men's Casual Shoes
+  if ((t.includes("shoe") || t.includes("footwear")) && (t.includes("women") || t.includes("ladies") || t.includes("girl"))) return "55790"; // Women's Athletic Shoes
+  if (t.includes("shoe") && !t.includes("organizer") && !t.includes("rack") && !t.includes("storage")) return "93427"; // Men's Casual Shoes (default)
+  if (t.includes("shoe organizer") || t.includes("shoe rack") || t.includes("shoe storage")) return "112576"; // Shoe Organizers
   return "20625"; // Kitchen Storage — default verified leaf
 }
 
@@ -400,12 +411,18 @@ async function validateAndFixCategory(categoryId: string, title: string): Promis
       console.log(`[category] ${categoryId} ✅ confirmed leaf`);
       return categoryId;
     }
-    // Not a leaf — get fresh suggestion
-    console.log(`[category] ${categoryId} ❌ not a leaf — fetching suggestion for "${title.slice(0,40)}"`);
+    // Not a leaf — try local keyword mapping first (fast, no API call)
+    console.log(`[category] ${categoryId} ❌ not a leaf — trying local keyword mapping for "${title.slice(0,40)}"`);
+    const localLeaf = getLeafCategoryByTitle(title);
+    if (localLeaf !== "20625") { // if it's not just the generic fallback
+      console.log(`[category] Local keyword mapped to: ${localLeaf}`);
+      return localLeaf;
+    }
+    // Fallback to Taxonomy API suggestion
     const { getCategoryIdForTitle } = await import("@/lib/ebay");
     const fresh = await getCategoryIdForTitle(title);
     if (fresh) {
-      console.log(`[category] Fresh leaf: ${fresh}`);
+      console.log(`[category] Taxonomy API leaf: ${fresh}`);
       return fresh;
     }
   } catch (e) { console.warn("[category] validation error:", e); }
