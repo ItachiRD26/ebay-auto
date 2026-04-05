@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppToken, getUserToken } from "@/lib/ebay";
 import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS } from "@/lib/firebase";
 import { QueueProduct, Settings } from "@/types";
-
 // Flat fallback keywords if no category known
 const DEFAULT_SCAN_KEYWORDS = [
  "travel organizer","packing cube","compression bag",
@@ -25,13 +24,41 @@ const _storeTokens: Record<string, { token: string; fetchedAt: number }> = {};
 
 async function getTradingData(numericId: string, storeId: string): Promise<{ soldCount: number; estimatedSold30d: number; listingAgeDays: number; shipFromCountry: string | null; variationCount: number }> {
   const empty = { soldCount: 0, estimatedSold30d: 0, listingAgeDays: 0, shipFromCountry: null, variationCount: 0 };
+
+  // ── Try Marketplace Insights API first (no user token, real sold data) ──────
+  try {
+    const { getAppToken } = await import("@/lib/ebay");
+    const appToken = await getAppToken();
+
+    const params = new URLSearchParams({ q: numericId, limit: "1", fieldgroups: "ADDITIONAL_SELLER_DETAILS" });
+    const res = await fetch(
+      `https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search?${params}`,
+      {
+        headers: { Authorization: `Bearer ${appToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+
+    if (res.ok) {
+      const data = await res.json() as { itemSales?: { soldQuantity?: number; lastSoldDate?: string; itemLocation?: { country?: string } }[] };
+      const sale = data.itemSales?.[0];
+      if (sale) {
+        const soldQty        = sale.soldQuantity ?? 0;
+        const lastSold       = sale.lastSoldDate ? new Date(sale.lastSoldDate) : null;
+        const daysSinceSold  = lastSold ? (Date.now() - lastSold.getTime()) / 86400000 : 999;
+        const estimatedSold30d = daysSinceSold < 30 ? Math.max(1, Math.round(soldQty * 0.3)) :
+                                 daysSinceSold < 60 ? Math.max(1, Math.round(soldQty * 0.15)) :
+                                 daysSinceSold < 90 ? Math.round(soldQty * 0.08) : 0;
+        return { soldCount: soldQty, estimatedSold30d, listingAgeDays: daysSinceSold, shipFromCountry: sale.itemLocation?.country ?? null, variationCount: 0 };
+      }
+    }
+  } catch { /* fall through to Trading API */ }
+
+  // ── Fallback: Trading API GetItem ─────────────────────────────────────────
   try {
     if (!_storeTokens[storeId] || Date.now() - _storeTokens[storeId].fetchedAt > 55_000) {
-      try {
-        _storeTokens[storeId] = { token: await getUserToken(storeId), fetchedAt: Date.now() };
-      } catch {
-        return empty;
-      }
+      try { _storeTokens[storeId] = { token: await getUserToken(storeId), fetchedAt: Date.now() }; }
+      catch { return empty; }
     }
     const _userToken = _storeTokens[storeId].token;
     const xml = `<?xml version="1.0" encoding="utf-8"?>
@@ -42,44 +69,31 @@ async function getTradingData(numericId: string, storeId: string): Promise<{ sol
 </GetItemRequest>`;
     const res = await fetch("https://api.ebay.com/ws/api.dll", {
       method: "POST",
-      headers: {
-        "X-EBAY-API-SITEID": "0",
-        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
-        "X-EBAY-API-CALL-NAME": "GetItem",
-        "Content-Type": "text/xml",
-      },
-      body: xml,
-      signal: AbortSignal.timeout(10000),
+      headers: { "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "967", "X-EBAY-API-CALL-NAME": "GetItem", "Content-Type": "text/xml" },
+      body: xml, signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return empty;
     const text = await res.text();
     if (text.includes("<Ack>Failure</Ack>")) return empty;
-
-    const soldMatch = text.match(/<QuantitySold>(\d+)<\/QuantitySold>/);
-    const soldCount = soldMatch ? parseInt(soldMatch[1], 10) : 0;
-
+    const soldMatch  = text.match(/<QuantitySold>(\d+)<\/QuantitySold>/);
+    const soldCount  = soldMatch ? parseInt(soldMatch[1], 10) : 0;
     const startMatch = text.match(/<StartTime>(.*?)<\/StartTime>/);
     let estimatedSold30d = soldCount;
-    let listingAgeDays = 0;
+    let listingAgeDays   = 0;
     if (startMatch) {
       listingAgeDays = Math.max(1, (Date.now() - new Date(startMatch[1]).getTime()) / 86400000);
       const soldPerDay = soldCount / listingAgeDays;
-      let decay = 1.0;
-      if      (listingAgeDays > 730) decay = 0.35;
-      else if (listingAgeDays > 365) decay = 0.50;
-      else if (listingAgeDays > 180) decay = 0.65;
-      else if (listingAgeDays > 90)  decay = 0.80;
+      const decay = listingAgeDays > 730 ? 0.35 : listingAgeDays > 365 ? 0.50 : listingAgeDays > 180 ? 0.65 : listingAgeDays > 90 ? 0.80 : 1.0;
       estimatedSold30d = Math.round(soldPerDay * 30 * decay);
     }
-    // Count variations
-    const varMatches = text.match(/<Variation>/g);
+    const varMatches     = text.match(/<Variation>/g);
     const variationCount = varMatches ? varMatches.length : 0;
-
-    const countryMatch = text.match(/<Country>(.*?)<\/Country>/);
+    const countryMatch   = text.match(/<Country>(.*?)<\/Country>/);
     const shipFromCountry = countryMatch ? countryMatch[1].trim() : null;
     return { soldCount, estimatedSold30d, listingAgeDays, shipFromCountry, variationCount };
   } catch { return empty; }
 }
+
 
 const EXCLUDED_KEYWORDS = [
   "iphone","samsung galaxy","apple watch","airpods","macbook","playstation","xbox",
