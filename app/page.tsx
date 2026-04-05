@@ -821,7 +821,7 @@ export default function Dashboard() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                 <button onClick={() => handleScanCategory(undefined)} disabled={!!scanningCategory}
                   style={{ padding: "0.38rem 0.9rem", background: "var(--purple)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer", opacity: scanningCategory ? 0.5 : 1 }}>
-                  {scanningCategory === "all" ? "⏳ Escaneando..." : "🔎 Escanear todas"}
+                  {scanningCategory === "all" ? "⏳ Scanning..." : "🔎 Scan all"}
                 </button>
                 {CATEGORIES.map(cat => (
                   <button key={cat} onClick={() => handleScanCategory(cat)} disabled={!!scanningCategory}
@@ -845,16 +845,39 @@ export default function Dashboard() {
                     <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--purple)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.4rem" }}>{cat}</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
                       {sellers.map(s => (
-                        <div key={s.username} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.55rem 0.9rem", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", flexWrap: "wrap" }}>
-                          <strong style={{ minWidth: 140, fontSize: "0.83rem" }}>{s.username}</strong>
-                          <span style={{ fontSize: "0.73rem", color: "var(--green)", minWidth: 80 }}>{s.totalListings.toLocaleString()} listings</span>
-                          <span style={{ fontSize: "0.7rem", color: "var(--text3)", flex: 1 }}>{s.sampleTitles?.[0] ?? ""}</span>
-                          <button onClick={() => handleImportSeller(s.userUrl, s.category)}
-                            style={{ fontSize: "0.72rem", padding: "0.25rem 0.65rem", background: "var(--cyan)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", cursor: "pointer" }}>
-                            {importingStore ? "⏳..." : "📥 Importar"}
-                          </button>
-                          <button onClick={() => handleDeleteSeller(s.username)}
-                            style={{ fontSize: "0.72rem", padding: "0.25rem 0.55rem", background: "transparent", color: "var(--red)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", cursor: "pointer" }}>✕</button>
+                        <div key={s.username} style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "0.65rem 0.9rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                          {/* Row 1: username + listings count + delete */}
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                            <a href={s.userUrl} target="_blank" rel="noopener noreferrer"
+                              style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--blue)", textDecoration: "none", flex: 1 }}
+                              title="Open store on eBay">
+                              🏪 {s.username} ↗
+                            </a>
+                            <span style={{ fontSize: "0.72rem", background: "rgba(16,185,129,0.12)", color: "var(--green)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
+                              {s.totalListings.toLocaleString()} listings
+                            </span>
+                            <button onClick={() => handleDeleteSeller(s.username)}
+                              style={{ fontSize: "0.72rem", padding: "0.2rem 0.5rem", background: "transparent", color: "var(--red)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", cursor: "pointer", flexShrink: 0 }}>✕</button>
+                          </div>
+
+                          {/* Row 2: sample titles */}
+                          {s.sampleTitles?.slice(0, 2).map((t: string, i: number) => (
+                            <div key={i} style={{ fontSize: "0.72rem", color: "var(--text3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              · {t}
+                            </div>
+                          ))}
+
+                          {/* Row 3: copy link button */}
+                          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.15rem" }}>
+                            <button
+                              onClick={() => { navigator.clipboard.writeText(s.userUrl); }}
+                              style={{ fontSize: "0.71rem", padding: "0.22rem 0.6rem", background: "var(--bg3)", color: "var(--text2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", cursor: "pointer" }}>
+                              📋 Copy link
+                            </button>
+                            <span style={{ fontSize: "0.7rem", color: "var(--text3)", alignSelf: "center" }}>
+                              Paste link in URL + Store tab to import
+                            </span>
+                          </div>
                         </div>
                       ))}
                     </div>

@@ -24,6 +24,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   const [publishing, setPublishing] = useState(false);
   const [delisting, setDelisting]           = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
+  const [showForceModal, setShowForceModal]       = useState(false);
 
   const sellingPrice = parseFloat(price) || 0;
   const costPrice = parseFloat(eproloPrice) || 0;
@@ -204,12 +205,11 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                 </button>
                 {(product as QueueProduct & { tooManyVariations?: boolean }).tooManyVariations && (
                   <button
-                    onClick={handleForcePublish}
+                    onClick={() => setShowForceModal(true)}
                     disabled={publishing}
                     style={{ flexShrink: 0, padding: "0.5rem 0.85rem", background: "linear-gradient(135deg, #7c3aed, #6d28d9)", color: "#fff", border: "none", borderRadius: 7, fontWeight: 600, fontSize: "0.78rem", cursor: "pointer", whiteSpace: "nowrap" }}
-                    title="Publish with the cheapest variants only (trimmed to your max)"
                   >
-                    {publishing ? "Publishing..." : "⚡ List anyway"}
+                    ⚡ List anyway
                   </button>
                 )}
               </div>
@@ -366,6 +366,84 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         .btn-delist  { background: #1a0a0a; color: #ef4444; border: 1px solid #7f1d1d44; }
         .published-info { font-size: 0.73rem; color: #64748b; display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       `}</style>
+
+
+      {/* ── List Anyway Modal (too many variations) ───────────────────── */}
+      {showForceModal && (
+        <div
+          onClick={() => setShowForceModal(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 600,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: "#0f0f1a", border: "1px solid #4c1d95", borderRadius: 12,
+              width: "100%", maxWidth: 400, overflow: "hidden" }}
+          >
+            {/* Header */}
+            <div style={{ padding: "1rem 1.25rem", borderBottom: "1px solid #1e2235",
+              background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(109,40,217,0.08))" }}>
+              <div style={{ fontSize: "1.4rem", marginBottom: "0.3rem" }}>⚡</div>
+              <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#e2e8f0" }}>
+                List with trimmed variations?
+              </div>
+            </div>
+
+            {/* Product preview */}
+            <div style={{ display: "flex", gap: "0.75rem", padding: "0.9rem 1.25rem",
+              borderBottom: "1px solid #1e2235", alignItems: "center" }}>
+              {product.images?.[0]
+                ? <img src={product.images[0]} alt="" style={{ width: 52, height: 52,
+                    objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />
+                : <div style={{ width: 52, height: 52, background: "#1a1a2e", borderRadius: 6, flexShrink: 0 }} />
+              }
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "#cbd5e1",
+                  overflow: "hidden", textOverflow: "ellipsis",
+                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                  {product.title}
+                </div>
+                <div style={{ fontSize: "0.72rem", color: "#64748b", marginTop: 3 }}>
+                  ${product.suggestedSellingPrice?.toFixed(2)}
+                </div>
+              </div>
+            </div>
+
+            {/* Info */}
+            <div style={{ padding: "1rem 1.25rem", fontSize: "0.82rem", color: "#94a3b8", lineHeight: 1.6 }}>
+              <p style={{ margin: 0 }}>
+                This product exceeds your max variations limit. If you list anyway,{" "}
+                <strong style={{ color: "#a78bfa" }}>all variants will be published</strong>{" "}
+                regardless of the limit.
+              </p>
+              <p style={{ margin: "0.6rem 0 0", fontSize: "0.76rem", color: "#64748b" }}>
+                Note: eBay allows up to 250 variations per listing.
+              </p>
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem",
+              padding: "0 1.25rem 1.25rem" }}>
+              <button
+                onClick={() => setShowForceModal(false)}
+                style={{ padding: "0.6rem", background: "#1a1a2e", border: "1px solid #2d3748",
+                  borderRadius: 7, color: "#94a3b8", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setShowForceModal(false); handleForcePublish(); }}
+                disabled={publishing}
+                style={{ padding: "0.6rem", background: "linear-gradient(135deg, #7c3aed, #6d28d9)",
+                  border: "none", borderRadius: 7, color: "#fff", fontWeight: 700,
+                  fontSize: "0.85rem", cursor: "pointer", opacity: publishing ? 0.6 : 1 }}
+              >
+                {publishing ? "Publishing..." : "⚡ List anyway"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Reject Confirmation Modal ─────────────────────────────────── */}
       {showRejectConfirm && (

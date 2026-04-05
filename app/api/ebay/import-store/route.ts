@@ -183,30 +183,75 @@ function extractSeller(url: string): string | null {
   return null;
 }
 
-// ─── Fetch one page of seller listings via Browse API ────────────────────────
-async function fetchSellerPage(seller: string, offset: number, token: string, keyword = "a") {
-  const params = new URLSearchParams({
-    q:     keyword,
-    limit: "100",
-    offset: offset.toString(),
-    filter: `sellers:{${seller}},buyingOptions:{FIXED_PRICE},conditions:{NEW}`,
-    fieldgroups: "EXTENDED",
-    sort: "bestMatch",  // most sold first
+// ─── Fetch seller listings via GetSellerList (Trading API — no keywords needed) ─
+// Returns ALL active listings from a seller, paginated by EntriesPerPage + PageNumber
+async function fetchSellerPage(seller: string, page: number, userToken: string): Promise<{
+  items: { itemId: string; title: string; price: number; shippingCost: number; sold: number; startTime: string; categoryId: string; pic: string }[];
+  hasMore: boolean;
+  total: number;
+}> {
+  const PAGE_SIZE = 200;
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<GetSellerListRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
+  <UserID>${seller}</UserID>
+  <ActiveList>true</ActiveList>
+  <ListingType>FixedPriceItem</ListingType>
+  <Pagination>
+    <EntriesPerPage>${PAGE_SIZE}</EntriesPerPage>
+    <PageNumber>${page}</PageNumber>
+  </Pagination>
+  <DetailLevel>ReturnAll</DetailLevel>
+  <EndTimeFrom>${new Date().toISOString()}</EndTimeFrom>
+  <EndTimeTo>${new Date(Date.now() + 90 * 86400000).toISOString()}</EndTimeTo>
+</GetSellerListRequest>`;
+
+  const res = await fetch("https://api.ebay.com/ws/api.dll", {
+    method: "POST",
+    headers: {
+      "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+      "X-EBAY-API-CALL-NAME": "GetSellerList",
+      "Content-Type": "text/xml",
+    },
+    body: xml,
+    signal: AbortSignal.timeout(30000),
   });
 
-  const res = await fetch(
-    `https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-      },
-      signal: AbortSignal.timeout(15000),
-    }
-  );
   const text = await res.text();
-  if (!res.ok) throw new Error(`Browse API ${res.status}: ${text.slice(0, 200)}`);
-  try { return JSON.parse(text); } catch { return { itemSummaries: [] }; }
+  if (!res.ok || text.includes("<Ack>Failure</Ack>")) {
+    console.warn(`[import-store] GetSellerList page ${page} failed`);
+    return { items: [], hasMore: false, total: 0 };
+  }
+
+  // Parse total pages
+  const totalPagesMatch = text.match(/<TotalNumberOfPages>(\d+)<\/TotalNumberOfPages>/);
+  const totalEntriesMatch = text.match(/<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/);
+  const totalPages = totalPagesMatch ? parseInt(totalPagesMatch[1], 10) : 1;
+  const total = totalEntriesMatch ? parseInt(totalEntriesMatch[1], 10) : 0;
+
+  // Extract all <Item> blocks
+  const itemBlocks = text.match(/<Item>([\s\S]*?)<\/Item>/g) ?? [];
+  const items = itemBlocks.map(block => {
+    const get = (tag: string) => block.match(new RegExp(`<${tag}>(.*?)<\/${tag}>`))?.[1]?.trim() ?? "";
+    const itemId    = get("ItemID");
+    const title     = get("Title");
+    const price     = get("CurrentPrice") || get("StartPrice") || "0";
+    const quantity  = parseInt(get("Quantity") || "1", 10);
+    const sold      = parseInt(get("QuantitySold") || "0", 10);
+    const startTime = get("StartTime");
+    const categoryId = get("CategoryID");
+    // Get first picture
+    const picMatch  = block.match(/<PictureURL>(.*?)<\/PictureURL>/);
+    const pic       = picMatch?.[1]?.trim() ?? "";
+    // Shipping
+    const shippingCostMatch = block.match(/<ShippingServiceCost[^>]*>(.*?)<\/ShippingServiceCost>/);
+    const shippingCost = parseFloat(shippingCostMatch?.[1] ?? "0") || 0;
+
+    return { itemId, title, price: parseFloat(price), shippingCost, quantity, sold, startTime, categoryId, pic };
+  }).filter(i => i.itemId && i.title);
+
+  return { items: items as never, hasMore: page < totalPages, total };
 }
 
 
@@ -322,82 +367,103 @@ export async function POST(req: NextRequest) {
 
     console.log(`\n[import-store] 🏪 Importando tienda: ${seller}`);
 
-    const token = await getAppToken();
+    // Load settings + user blocked keywords from Firestore
+    const [settingsSnap, kwSnap] = await Promise.all([
+      getSettingsDoc(userId, "main").get(),
+      db.collection("users").doc(userId).collection("settings").doc("keywords").get(),
+    ]);
+    const settings = (settingsSnap.exists ? settingsSnap.data() as unknown : DEFAULT_SETTINGS) as Settings;
+    const kwData = kwSnap.data() as { excludedKeywords?: string[] } | undefined;
+    // Merge user's blocked keywords with the hardcoded list
+    const userBlockedKws = kwData?.excludedKeywords ?? [];
+    const allBlockedKws  = [...new Set([...EXCLUDED_KEYWORDS, ...userBlockedKws.map(k => k.toLowerCase().trim())])];
+    const isBannedDynamic = (title: string) => {
+      const t = title.toLowerCase();
+      return allBlockedKws.some(kw => kw && t.includes(kw));
+    };
 
-    // Load settings for markup
-    const settingsSnap = await getSettingsDoc(userId, "main").get();
-    const settings = (settingsSnap.exists
-      ? (settingsSnap.data() as unknown)
-      : DEFAULT_SETTINGS) as Settings;
-
-    // Single pass with keywords — stop a keyword early if yield drops
-    // Use category keywords if available — much more targeted than letters
-    const SCAN_KEYWORDS = category && SELLER_CATEGORIES[category]
-      ? SELLER_CATEGORIES[category]
-      : DEFAULT_SCAN_KEYWORDS;
+    // ── GetSellerList: paginate through ALL seller listings, filter by price+sales ──
     const MAX_ITEMS_PER_STORE = 2000;
-    console.log(`[import-store] 📂 Categoría: ${category ?? "general"} — ${SCAN_KEYWORDS.length} keywords`);
+    const MAX_PAGES           = 20;
+    const minPrice  = settings.minPrice  ?? CONFIG.MIN_PRICE;
+    const maxPrice  = settings.maxPrice  ?? CONFIG.MAX_PRICE;
+    const minSold   = settings.minSoldCount ?? CONFIG.MIN_SOLD_TOTAL;
+    const minSold30 = settings.minSold30d   ?? CONFIG.MIN_SOLD_30D;
+
+    console.log(`[import-store] 📦 GetSellerList: price $${minPrice}-$${maxPrice} | min sold ${minSold} | min/30d ${minSold30}`);
+
+    let userToken: string;
+    try {
+      userToken = await getUserToken(storeId);
+    } catch {
+      return NextResponse.json({ error: "Store not connected — connect eBay account first" }, { status: 400 });
+    }
 
     let totalChecked = 0;
     let totalAdded   = 0;
     let totalSkipped = 0;
     const seenIds    = new Set<string>();
+    let page    = 1;
+    let hasMore = true;
 
-    outer:
-    for (const kw of SCAN_KEYWORDS) {
-      let offset    = 0;
-      let kwNew     = 0;
-      let hasMore   = true;
+    while (hasMore && page <= MAX_PAGES && totalChecked < MAX_ITEMS_PER_STORE) {
+      const { items, hasMore: more, total } = await fetchSellerPage(seller, page, userToken);
+      hasMore = more;
+      if (items.length === 0) break;
+      console.log(`[import-store] page ${page}/${Math.ceil(total / 200)} — ${items.length} listings (total: ${total})`);
 
-      while (hasMore) {
-        if (totalChecked >= MAX_ITEMS_PER_STORE) {
-          console.log(`[import-store] 🛑 Límite ${MAX_ITEMS_PER_STORE} items alcanzado`);
-          break outer;
-        }
+      for (const item of items) {
+        if (totalChecked >= MAX_ITEMS_PER_STORE) break;
+        if (seenIds.has(item.itemId)) continue;
+        seenIds.add(item.itemId);
+        totalChecked++;
 
-        const result = await fetchSellerPage(seller, offset, token, kw);
-        const items  = (result.itemSummaries ?? []) as Record<string, unknown>[];
-        const total  = (result.total as number) ?? 0;
-        if (items.length === 0) break;
+        const title = item.title ?? "";
 
-        const newItems = items.filter(item => {
-          const id = ((item.itemId as string) ?? "").split("|")[1] ?? (item.itemId as string);
-          if (seenIds.has(id)) return false;
-          seenIds.add(id);
-          return true;
-        });
+        if (item.price < minPrice || item.price > maxPrice)   { totalSkipped++; continue; }
+        if (isBannedDynamic(title))                           { totalSkipped++; continue; }
 
-        // If less than 10% new items in this page, keyword is exhausted — skip to next
-        if (offset > 0 && newItems.length < items.length * 0.1) {
-          console.log(`[import-store] ⏭ "${kw}" agotado (${newItems.length}/${items.length} nuevos) — siguiente keyword`);
-          break;
-        }
+        const dup = await queueCol(userId).where("ebayItemId", "==", item.itemId).limit(1).get();
+        if (!dup.empty) { totalSkipped++; continue; }
 
-        console.log(`[import-store] 📦 "${kw}" offset=${offset} — ${newItems.length} nuevos / ${items.length} (total tienda: ${total})`);
+        const td = await getTradingData(item.itemId, storeId);
+        if (td.soldCount < minSold)          { console.log(`[import-store] SKIP [sold ${td.soldCount}<${minSold}] "${title.slice(0,40)}"`); totalSkipped++; continue; }
+        if (td.estimatedSold30d < minSold30) { console.log(`[import-store] SKIP [30d ${td.estimatedSold30d}<${minSold30}] "${title.slice(0,40)}"`); totalSkipped++; continue; }
+        if (td.shipFromCountry && !isChina(td.shipFromCountry)) { totalSkipped++; continue; }
 
-        for (const item of newItems) {
-          totalChecked++;
-          kwNew++;
-          const { added, reason, title } = await processItem(item, settings, seller, storeId, userId, undefined);
-          if (added) totalAdded++;
-          else {
-            totalSkipped++;
-            if (reason !== "duplicado" && reason !== "banned" && reason !== "titulo duplicado")
-              console.log(`[import-store] SKIP [${reason}] "${title}"`);
-          }
-          await new Promise(r => setTimeout(r, 50)); // reduced delay
-        }
+        const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
+        const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
+        if (!titleDup.empty) { totalSkipped++; continue; }
 
-        offset  += items.length;
-        hasMore  = offset < Math.min(total, 5000) && items.length === 100;
-        if (hasMore) await new Promise(r => setTimeout(r, 300)); // reduced delay
+        const totalMarketCost       = item.price + item.shippingCost;
+        const markupPercent         = settings.markupPercent ?? CONFIG.MARKUP_PERCENT;
+        const suggestedSellingPrice = parseFloat((totalMarketCost * (1 + markupPercent / 100)).toFixed(2));
+
+        const product: Omit<QueueProduct, "id"> = {
+          ebayItemId: item.itemId, title, normalizedTitle,
+          images: item.pic ? [item.pic] : [], userId, storeId,
+          ebayReferencePrice: item.price, ebayShippingCost: item.shippingCost,
+          totalMarketCost, eproloPrice: null, eproloUrl: null,
+          suggestedSellingPrice, stock: CONFIG.STOCK, condition: "New",
+          categoryId: item.categoryId, categoryName: "",
+          soldCount: td.soldCount, estimatedSold30d: td.estimatedSold30d,
+          listingAgeDays: td.listingAgeDays,
+          sourceUrl: `https://www.ebay.com/itm/${item.itemId}`,
+          description: "", margin: null, marginPercent: null,
+          status: "approved", createdAt: Date.now(), updatedAt: Date.now(),
+        };
+
+        await queueCol(userId).add(product);
+        totalAdded++;
+        console.log(`[import-store] ✅ ADDED "${title.slice(0, 45)}" $${suggestedSellingPrice} | ${td.soldCount} sold`);
+        await new Promise(r => setTimeout(r, 60));
       }
 
-      console.log(`[import-store] ✅ "${kw}" — ${kwNew} nuevos | acumulado: ${totalChecked}`);
-      if (kwNew === 0) break; // keyword found nothing new — stop
+      page++;
+      if (hasMore) await new Promise(r => setTimeout(r, 400));
     }
 
-    console.log(`[import-store] ✅ Done — ${totalAdded} agregados | ${totalSkipped} saltados | ${totalChecked} revisados`);
+    console.log(`[import-store] ✅ Done — ${totalAdded} added | ${totalSkipped} skipped | ${totalChecked} checked`);
     return NextResponse.json({ success: true, seller, checked: totalChecked, added: totalAdded, skipped: totalSkipped });
 
   } catch (e) {

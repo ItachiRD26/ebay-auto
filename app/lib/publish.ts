@@ -458,14 +458,8 @@ export async function publishProductById(productId: string, userToken: string, u
       refVariations = (refData as unknown as ReferenceItemData).variations ?? null;
       if (refVariations && refVariations.variations.length > MAX_VARIATIONS) {
         if (forceVariations) {
-          // Trim to MAX_VARIATIONS keeping the cheapest variants first (sorted by refPrice asc)
-          refVariations = {
-            ...refVariations,
-            variations: [...refVariations.variations]
-              .sort((a, b) => a.refPrice - b.refPrice)
-              .slice(0, MAX_VARIATIONS),
-          };
-          console.log(`[publish] ⚡ forceVariations=true — trimmed to ${MAX_VARIATIONS} cheapest variants`);
+          // List ALL variants — user chose to ignore the limit
+          console.log(`[publish] ⚡ forceVariations=true — listing all ${refVariations.variations.length} variants`);
         } else {
           throw new Error(`TOO_MANY_VARIATIONS:${refVariations.variations.length}:${MAX_VARIATIONS}`);
         }
