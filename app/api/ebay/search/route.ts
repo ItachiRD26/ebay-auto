@@ -157,6 +157,14 @@ interface TradingItemData {
 
 const _tokenCache: Record<string, { token: string; fetchedAt: number }> = {};
 
+// Token expiry signal — set when eBay returns auth errors during search
+// POST handler checks this and aborts the search with a clear message
+let _tokenExpiredStoreId: string | null = null;
+let _tokenExpiredAt: number = 0;
+
+export function getTokenExpiredStore() { return _tokenExpiredStoreId; }
+export function clearTokenExpired()   { _tokenExpiredStoreId = null; _tokenExpiredAt = 0; }
+
 async function getItemDataViaTradingAPI(numericItemId: string, storeId: string): Promise<TradingItemData> {
   const empty: TradingItemData = { soldCount: 0, estimatedSold30d: 0, listingAgeDays: 0, shipFromCountry: null };
 
@@ -200,8 +208,20 @@ async function getItemDataViaTradingAPI(numericItemId: string, storeId: string):
     const text = await res.text();
 
     if (text.includes("<Ack>Failure</Ack>")) {
-      const errMatch = text.match(/<ShortMessage>(.*?)<\/ShortMessage>/);
-      console.warn(`   [Trading] Error ${numericItemId}: ${errMatch?.[1] ?? "unknown"}`);
+      const errMatch   = text.match(/<ShortMessage>(.*?)<\/ShortMessage>/);
+      const errCodeMatch = text.match(/<ErrorCode>(\d+)<\/ErrorCode>/);
+      const errCode    = errCodeMatch ? parseInt(errCodeMatch[1], 10) : 0;
+      const errMsg     = errMatch?.[1] ?? "unknown";
+
+      // eBay auth error codes: 931 = token invalid, 932 = token expired, 930 = auth required
+      if ([930, 931, 932].includes(errCode) || errMsg.toLowerCase().includes("token") || errMsg.toLowerCase().includes("auth")) {
+        console.error(`   [Trading] ⚠️ TOKEN EXPIRED/INVALID for store ${storeId}: ${errMsg}`);
+        _tokenExpiredStoreId = storeId;
+        _tokenExpiredAt      = Date.now();
+        delete _tokenCache[storeId]; // clear cached token
+      } else {
+        console.warn(`   [Trading] Error ${numericItemId}: ${errMsg}`);
+      }
       return empty;
     }
 
@@ -403,6 +423,16 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { keywords, limit = 50, autoSearch = false, storeId, userId } = body;
     if (!storeId) return NextResponse.json({ error: "storeId required" }, { status: 400 });
+
+    // Check if token was already detected as expired in a previous call
+    if (_tokenExpiredStoreId === storeId) {
+      console.warn(`[search] ⛔ Aborting — token expired for store ${storeId}`);
+      return NextResponse.json({
+        error: "TOKEN_EXPIRED",
+        message: "eBay token expired — please reconnect your store",
+        storeId,
+      }, { status: 401 });
+    }
     if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
 
     let totalAdded = 0;

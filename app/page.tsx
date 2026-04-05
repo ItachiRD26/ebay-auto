@@ -49,7 +49,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   // ── Search ──────────────────────────────────────────────────────────────────
-  const [searching, setSearching]       = useState(false);
+  const [searching,         setSearching]        = useState(false);
+  const [tokenExpiredStore, setTokenExpiredStore] = useState<string | null>(null);
   const [searchMode, setSearchMode]     = useState<"auto" | "keyword" | "url">("auto");
   const [kwInput, setKwInput]           = useState("");
   const [urlInput, setUrlInput]         = useState("");
@@ -84,7 +85,8 @@ export default function Dashboard() {
     totalListings: number; sampleTitles: string[]; category: string;
   }>>([]);
   const [scanningCategory, setScanningCategory] = useState<string | null>(null);
-  const [importingStore, setImportingStore]     = useState(false);
+  const [importingStore,  setImportingStore]    = useState(false);
+  const [importProgress,  setImportProgress]   = useState<{ checked: number; added: number; seller: string } | null>(null);
 
   // ── Actions ──────────────────────────────────────────────────────────────────
   const [promoting, setPromoting]       = useState(false);
@@ -355,11 +357,21 @@ export default function Dashboard() {
           // Polling handles reviewed/passed in real-time — just track loop position
           setSearchProgress(p => p ? { ...p, keyword: kw, keywords: { done: i, total: reversed.length } } : p);
           try {
-            await fetch("/api/ebay/search", {
+            const sr = await fetch("/api/ebay/search", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ keywords: kw, storeId: selectedStoreId, userId: uid }),
             });
+            if (sr.status === 401) {
+              const errData = await sr.json();
+              if (errData.error === "TOKEN_EXPIRED") {
+                setTokenExpiredStore(selectedStoreId);
+                setPaused(true);
+                pauseRef.current = true;
+                toast("⚠️ eBay token expired — reconnect your store", "err");
+                break; // stop keyword loop
+              }
+            }
           } catch { /* continue on error, next keyword */ }
         }
         // Completed — clear saved state
@@ -369,12 +381,20 @@ export default function Dashboard() {
         if (!kwInput.trim()) { toast("Type a keyword first", "err"); return; }
         // Show progress for single keyword search
         setSearchProgress({ reviewed: 0, passed: 0, keyword: kwInput.trim(), keywords: { done: 0, total: 1 } });
-        await fetch("/api/ebay/search", {
+        const sr = await fetch("/api/ebay/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ keywords: kwInput.trim(), storeId: selectedStoreId, userId: uid }),
         });
-        toast("✅ Search complete", "ok");
+        if (sr.status === 401) {
+          const errData = await sr.json();
+          if (errData.error === "TOKEN_EXPIRED") {
+            setTokenExpiredStore(selectedStoreId);
+            toast("⚠️ eBay token expired — reconnect your store", "err");
+          }
+        } else {
+          toast("✅ Search complete", "ok");
+        }
       } else {
         await handleImport();
         return;
@@ -428,8 +448,9 @@ export default function Dashboard() {
 
   const handleImportStore = async () => {
     if (!requireStore()) return;
-    if (!storeUrlInput.trim()) { toast("Pega la URL de la tienda", "err"); return; }
+    if (!storeUrlInput.trim()) { toast("Paste a store URL first", "err"); return; }
     setImportingStore(true);
+    setImportProgress(null);
     try {
       const res  = await fetch("/api/ebay/import-store", {
         method: "POST",
@@ -438,7 +459,8 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (data.error) { toast("❌ " + data.error, "err"); return; }
-      toast(`✅ ${data.seller}: ${data.added} agregados de ${data.checked} reviewed`, "ok");
+      setImportProgress({ checked: data.checked, added: data.added, seller: data.seller });
+      toast(`✅ ${data.seller}: ${data.added} products added from ${data.checked} scanned`, "ok");
       setActiveTab("approved");
     } finally {
       setImportingStore(false);
@@ -740,8 +762,24 @@ export default function Dashboard() {
                   />
                   <button onClick={handleImportStore} disabled={importingStore || !storeUrlInput.trim()}
                     style={{ flexShrink: 0, padding: "0.5rem 1rem", background: "var(--cyan)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
-                    {importingStore ? "⏳..." : "🏪 Import store"}
+                    {importingStore ? "⏳ Scanning..." : "🏪 Import store"}
                   </button>
+                {/* Import progress */}
+                {importingStore && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.5rem 0.75rem", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", color: "var(--text2)" }}>
+                    <div style={{ width: 12, height: 12, border: "2px solid var(--cyan)", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+                    Scanning store listings — filtering by price and sales. This may take a few minutes...
+                  </div>
+                )}
+                {importProgress && !importingStore && (
+                  <div style={{ padding: "0.5rem 0.75rem", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem" }}>
+                    <strong style={{ color: "var(--green)" }}>✅ {importProgress.seller}</strong>
+                    <span style={{ color: "var(--text2)", marginLeft: "0.5rem" }}>
+                      {importProgress.added} products added · {importProgress.checked} listings scanned
+                    </span>
+                  </div>
+                )}
+                
                 </div>
               </div>
             )}
@@ -770,6 +808,28 @@ export default function Dashboard() {
               >
                 {paused ? "▶ Resume" : "⏸ Pause"}
               </button>
+            </div>
+          )}
+
+
+          {/* ── Token expired banner ── */}
+          {tokenExpiredStore && (
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.8rem 1rem", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "var(--radius)", fontSize: "0.82rem" }}>
+              <span style={{ fontSize: "1.1rem" }}>🔑</span>
+              <div style={{ flex: 1 }}>
+                <strong style={{ color: "var(--red)" }}>eBay token expired</strong>
+                <span style={{ color: "var(--text2)", marginLeft: "0.5rem" }}>— Search paused. Reconnect your store to continue.</span>
+              </div>
+              <button
+                onClick={() => { window.open(`/connect?storeId=${tokenExpiredStore}`, "_blank"); }}
+                style={{ padding: "0.35rem 0.85rem", background: "var(--blue)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer", whiteSpace: "nowrap" }}
+              >
+                🔗 Reconnect
+              </button>
+              <button
+                onClick={() => setTokenExpiredStore(null)}
+                style={{ padding: "0.35rem 0.6rem", background: "transparent", color: "var(--text3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", cursor: "pointer" }}
+              >✕</button>
             </div>
           )}
 

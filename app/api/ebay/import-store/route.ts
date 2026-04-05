@@ -420,16 +420,17 @@ export async function POST(req: NextRequest) {
 
         const title = item.title ?? "";
 
-        if (item.price < minPrice || item.price > maxPrice)   { totalSkipped++; continue; }
-        if (isBannedDynamic(title))                           { totalSkipped++; continue; }
+        // Filter by price only (keep it simple — user chose this store manually)
+        if (item.price < minPrice || item.price > maxPrice) { totalSkipped++; continue; }
 
+        // Duplicate check
         const dup = await queueCol(userId).where("ebayItemId", "==", item.itemId).limit(1).get();
         if (!dup.empty) { totalSkipped++; continue; }
 
+        // Sales validation — filter by min sales only
         const td = await getTradingData(item.itemId, storeId);
-        if (td.soldCount < minSold)          { console.log(`[import-store] SKIP [sold ${td.soldCount}<${minSold}] "${title.slice(0,40)}"`); totalSkipped++; continue; }
-        if (td.estimatedSold30d < minSold30) { console.log(`[import-store] SKIP [30d ${td.estimatedSold30d}<${minSold30}] "${title.slice(0,40)}"`); totalSkipped++; continue; }
-        if (td.shipFromCountry && !isChina(td.shipFromCountry)) { totalSkipped++; continue; }
+        if (td.soldCount < minSold)          { totalSkipped++; continue; }
+        if (td.estimatedSold30d < minSold30) { totalSkipped++; continue; }
 
         const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
         const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
