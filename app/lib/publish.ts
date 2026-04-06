@@ -133,6 +133,11 @@ Return ONLY this JSON:
           : (t.includes("vintage") ? "Vintage" : t.includes("modern") ? "Modern" : t.includes("retro") ? "Retro" : t.includes("sport") ? "Athletic" : "Casual"),
         Department: t.includes("men") || t.includes("male") || t.includes("boy") ? "Men" : t.includes("women") || t.includes("female") || t.includes("girl") || t.includes("lady") ? "Women" : t.includes("kid") || t.includes("child") || t.includes("baby") ? "Kids" : "Men",
         Model: "Compatible",
+        // Size Type: the width/fit type — almost always "Regular" for standard shoes
+        "Size Type": t.includes("wide") ? "Wide" : t.includes("narrow") ? "Narrow" : t.includes("extra wide") ? "Extra Wide" : "Regular",
+        // Size: eBay requires this even for variation products in some footwear categories.
+        // Use a common men's or women's size as the representative value.
+        "Size": t.includes("women") || t.includes("ladies") || t.includes("female") ? "US 7" : "US 9",
         "Occasion": isFootwearCtx
           ? (t.includes("sport") || t.includes("running") || t.includes("gym") ? "Athletic" : t.includes("formal") || t.includes("dress") ? "Formal" : "Casual")
           : (t.includes("sport") || t.includes("gym") || t.includes("bike") ? "Sport" : t.includes("office") || t.includes("work") ? "Work" : "Casual"),

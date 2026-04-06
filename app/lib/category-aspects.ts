@@ -597,19 +597,19 @@ const VALID_ASPECTS: Record<CategoryType, Set<string>> = {
     "department", "style", "fastening", "upper material", "toe shape",
     "occasion", "heel type", "insole material", "sole material",
     "lining material", "shoe width", "type", "color", "material",
-    "size", "us shoe size", "uk shoe size", "eu shoe size",
+    "size", "size type", "us shoe size", "uk shoe size", "eu shoe size",
     "performance/activity", "pattern", "closure", "shaft style",
   ]),
   footwear_women: new Set([
     "department", "style", "fastening", "upper material", "toe shape",
     "occasion", "heel height", "heel type", "insole material", "sole material",
     "lining material", "shoe width", "type", "color", "material",
-    "size", "us shoe size", "uk shoe size", "eu shoe size",
+    "size", "size type", "us shoe size", "uk shoe size", "eu shoe size",
     "performance/activity", "pattern", "closure", "shaft style",
   ]),
   footwear_kids: new Set([
     "department", "style", "fastening", "upper material", "toe shape",
-    "occasion", "color", "material", "size", "us shoe size",
+    "occasion", "color", "material", "size", "size type", "us shoe size",
     "type", "pattern", "closure",
   ]),
   clothing_men: new Set([
@@ -744,6 +744,19 @@ export function buildSmartAspects(
       if (!aspects["Occasion"])       aspects["Occasion"]       = [inferOccasion(t, categoryType)];
       if (!aspects["Heel Type"])      aspects["Heel Type"]      = [inferHeelType(t)];
       if (!aspects["Color"])          aspects["Color"]          = [inferColor(t)];
+      // Size Type is always required for eBay footwear categories.
+      // "Regular" covers ~95% of standard-width shoes.
+      if (!aspects["Size Type"])      aspects["Size Type"]      = [
+        t.includes("wide") ? "Wide" :
+        t.includes("narrow") ? "Narrow" :
+        t.includes("extra wide") ? "Extra Wide" :
+        "Regular"
+      ];
+      // Size: eBay requires it even for variation products (category-specific).
+      // When shoe size is in variations (US Shoe Size), we still need a value here.
+      // addFixedPriceItem will filter out the variant-dimension aspects from
+      // ItemSpecifics but Size (generic) stays — put a sensible default.
+      if (!aspects["Size"])           aspects["Size"]           = ["US 8"];
       break;
 
     case "footwear_women":
@@ -756,15 +769,23 @@ export function buildSmartAspects(
       if (!aspects["Heel Type"])      aspects["Heel Type"]      = [inferHeelType(t)];
       if (!aspects["Heel Height"])    aspects["Heel Height"]    = [inferHeelHeight(t)];
       if (!aspects["Color"])          aspects["Color"]          = [inferColor(t)];
+      if (!aspects["Size Type"])      aspects["Size Type"]      = [
+        t.includes("wide") ? "Wide" :
+        t.includes("narrow") ? "Narrow" :
+        "Regular"
+      ];
+      if (!aspects["Size"])           aspects["Size"]           = ["US 7"];
       break;
 
     case "footwear_kids":
       aspects["Department"]     = [
         t.includes("boy") ? "Boys" : t.includes("girl") ? "Girls" : "Kids",
       ];
-      if (!aspects["Style"])   aspects["Style"]   = [inferStyle(t, categoryType)];
-      if (!aspects["Color"])   aspects["Color"]   = [inferColor(t)];
-      if (!aspects["Occasion"])aspects["Occasion"] = [inferOccasion(t, categoryType)];
+      if (!aspects["Style"])     aspects["Style"]     = [inferStyle(t, categoryType)];
+      if (!aspects["Color"])     aspects["Color"]     = [inferColor(t)];
+      if (!aspects["Occasion"])  aspects["Occasion"]  = [inferOccasion(t, categoryType)];
+      if (!aspects["Size Type"]) aspects["Size Type"] = ["Regular"];
+      if (!aspects["Size"])      aspects["Size"]      = ["US 4"];
       break;
 
     case "clothing_men":
