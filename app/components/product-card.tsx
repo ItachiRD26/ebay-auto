@@ -26,24 +26,24 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
   const [showForceModal, setShowForceModal] = useState(false);
 
-  // ── Variation-aware pricing ───────────────────────────────────────────────
-  const hasVariationPricing =
-    (product.refPriceMin ?? 0) > 0 &&
-    (product.refPriceMax ?? 0) > 0 &&
-    (product.refPriceMax ?? 0) >= (product.refPriceMin ?? 0);
-  const isVariation = hasVariationPricing && (product.refPriceMax ?? 0) > (product.refPriceMin ?? 0);
+  // ── Pricing ───────────────────────────────────────────────────────────────
+  // isVariation: has a REAL price range from GetItem (refPriceMax > refPriceMin)
+  // showMarkupUI: show the markup slider for ALL products (old+new, variation+single)
+  //   Old products in Firestore don't have refPriceMin/Max yet — they still get the slider
+  //   using ebayReferencePrice as the base. New variation products show a range.
+  const refMin = product.refPriceMin ?? product.ebayReferencePrice ?? 0;
+  const refMax = product.refPriceMax ?? product.ebayReferencePrice ?? 0;
+  const isVariation = refMax > refMin && refMin > 0;
+  const showMarkupUI = (refMin > 0) || (product.markupPercent !== undefined);
 
   const defaultMarkup = product.markupPercent ?? 6;
   const [markupPct, setMarkupPct] = useState<number>(defaultMarkup);
 
-  const varMinPrice = hasVariationPricing
-    ? +((product.refPriceMin ?? product.ebayReferencePrice) * (1 + markupPct / 100)).toFixed(2)
-    : null;
-  const varMaxPrice = hasVariationPricing
-    ? +((product.refPriceMax ?? product.ebayReferencePrice) * (1 + markupPct / 100)).toFixed(2)
-    : null;
+  // Live preview prices based on current slider value
+  const myMinPrice = +((refMin || product.totalMarketCost || 0) * (1 + markupPct / 100)).toFixed(2);
+  const myMaxPrice = isVariation ? +(refMax * (1 + markupPct / 100)).toFixed(2) : myMinPrice;
 
-  // ── Non-variation pricing ─────────────────────────────────────────────────
+  // ── Non-variation pricing (kept for editing single-price products) ─────────
   const sellingPrice = parseFloat(price) || 0;
   const costPrice = parseFloat(eproloPrice) || 0;
   const margin = costPrice > 0 ? sellingPrice - costPrice : null;
@@ -56,7 +56,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
     if (isVariation) {
       onUpdate({
         markupPercent: markupPct,
-        suggestedSellingPrice: varMinPrice ?? product.suggestedSellingPrice,
+        suggestedSellingPrice: myMinPrice || product.suggestedSellingPrice,
         description,
         stock: parseInt(stock) || 10,
       });
@@ -105,9 +105,10 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   };
 
   const saveMarkup = (pct: number) => {
+    const base = refMin || product.totalMarketCost || product.ebayReferencePrice || 0;
     onUpdate({
       markupPercent: pct,
-      suggestedSellingPrice: +((product.refPriceMin ?? product.ebayReferencePrice) * (1 + pct / 100)).toFixed(2),
+      suggestedSellingPrice: +(base * (1 + pct / 100)).toFixed(2),
     });
   };
 
@@ -162,107 +163,78 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
 
         {/* Pricing */}
         <div className="pricing">
-          {isVariation ? (
-            <div>
-              <div className="price-row" style={{ marginBottom: "0.6rem" }}>
-                <div className="price-item">
-                  <span className="price-label">Ref. eBay</span>
-                  <span className="price-value ref">
-                    ${(product.refPriceMin ?? product.ebayReferencePrice).toFixed(2)}
-                    {(product.refPriceMax ?? 0) > (product.refPriceMin ?? 0) && (
-                      <span style={{ fontSize: "0.8rem", color: "#64748b" }}> – ${product.refPriceMax!.toFixed(2)}</span>
-                    )}
-                  </span>
-                </div>
-                <div className="price-item">
-                  <span className="price-label">Tu rango</span>
-                  <span className="price-value sell">
-                    ${varMinPrice?.toFixed(2)}
-                    {varMaxPrice !== varMinPrice && (
-                      <span style={{ fontSize: "0.8rem" }}> – ${varMaxPrice?.toFixed(2)}</span>
-                    )}
-                  </span>
-                </div>
-              </div>
-              <div style={{ background: "#0d0d14", borderRadius: 6, padding: "0.5rem 0.6rem" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
-                  <span className="price-label">Markup</span>
-                  <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-                    {[3, 6, 10, 15].map(p => (
-                      <button
-                        key={p}
-                        onClick={() => { setMarkupPct(p); saveMarkup(p); }}
-                        style={{
-                          padding: "1px 7px", borderRadius: 4, fontSize: "0.7rem", fontWeight: 600,
-                          cursor: "pointer", border: "1px solid",
-                          background: markupPct === p ? "#3b82f6" : "transparent",
-                          color: markupPct === p ? "#fff" : "#64748b",
-                          borderColor: markupPct === p ? "#3b82f6" : "#2d3748",
-                        }}
-                      >
-                        {p}%
-                      </button>
-                    ))}
-                    <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: 4 }}>
-                      <input
-                        type="number" min={0} max={100} value={markupPct}
-                        onChange={e => setMarkupPct(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
-                        onBlur={() => saveMarkup(markupPct)}
-                        style={{ width: 40, background: "#0d0d14", border: "1px solid #2d3748", borderRadius: 4, color: "#e2e8f0", fontSize: "0.78rem", padding: "1px 4px", textAlign: "right", outline: "none" }}
-                      />
-                      <span style={{ fontSize: "0.72rem", color: "#64748b" }}>%</span>
-                    </div>
-                  </div>
-                </div>
-                <input
-                  type="range" min={0} max={50} step={1} value={markupPct}
-                  onChange={e => setMarkupPct(parseInt(e.target.value))}
-                  onMouseUp={() => saveMarkup(markupPct)}
-                  onTouchEnd={() => saveMarkup(markupPct)}
-                  style={{ width: "100%", accentColor: "#3b82f6", cursor: "pointer" }}
-                />
-              </div>
+          {/* Price row — always shown */}
+          <div className="price-row" style={{ marginBottom: showMarkupUI ? "0.6rem" : 0 }}>
+            <div className="price-item">
+              <span className="price-label">Ref. eBay</span>
+              <span className="price-value ref">
+                ${refMin.toFixed(2)}
+                {isVariation && (
+                  <span style={{ fontSize: "0.8rem", color: "#64748b" }}> – ${refMax.toFixed(2)}</span>
+                )}
+              </span>
             </div>
-          ) : (
-            <div className="price-row">
+            <div className="price-item">
+              <span className="price-label">{isVariation ? "Tu rango" : "Tu precio"}</span>
+              <span className="price-value sell">
+                ${myMinPrice.toFixed(2)}
+                {isVariation && myMaxPrice !== myMinPrice && (
+                  <span style={{ fontSize: "0.8rem" }}> – ${myMaxPrice.toFixed(2)}</span>
+                )}
+              </span>
+            </div>
+            {product.eproloPrice && !showMarkupUI && (
               <div className="price-item">
-                <span className="price-label">Ref. eBay</span>
-                <span className="price-value ref">${product.ebayReferencePrice?.toFixed(2)}</span>
+                <span className="price-label">eProlo</span>
+                <span className="price-value cost">${product.eproloPrice.toFixed(2)}</span>
               </div>
-              {editing ? (
-                <>
-                  <div className="price-item">
-                    <span className="price-label">Costo eProlo</span>
-                    <div className="price-input-wrap">
-                      <span className="price-prefix">$</span>
-                      <input className="price-input" value={eproloPrice} onChange={e => setEproloPrice(e.target.value)} placeholder="0.00" />
-                    </div>
+            )}
+          </div>
+
+          {/* Markup selector — shown for all products */}
+          {showMarkupUI && (
+            <div style={{ background: "#0d0d14", borderRadius: 6, padding: "0.5rem 0.6rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                <span className="price-label">Markup</span>
+                <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                  {[3, 6, 10, 15].map(p => (
+                    <button
+                      key={p}
+                      onClick={() => { setMarkupPct(p); saveMarkup(p); }}
+                      style={{
+                        padding: "1px 7px", borderRadius: 4, fontSize: "0.7rem", fontWeight: 600,
+                        cursor: "pointer", border: "1px solid",
+                        background: markupPct === p ? "#3b82f6" : "transparent",
+                        color: markupPct === p ? "#fff" : "#64748b",
+                        borderColor: markupPct === p ? "#3b82f6" : "#2d3748",
+                      }}
+                    >
+                      {p}%
+                    </button>
+                  ))}
+                  <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: 4 }}>
+                    <input
+                      type="number" min={0} max={100} value={markupPct}
+                      onChange={e => setMarkupPct(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
+                      onBlur={() => saveMarkup(markupPct)}
+                      style={{ width: 40, background: "#0d0d14", border: "1px solid #2d3748", borderRadius: 4, color: "#e2e8f0", fontSize: "0.78rem", padding: "1px 4px", textAlign: "right", outline: "none" }}
+                    />
+                    <span style={{ fontSize: "0.72rem", color: "#64748b" }}>%</span>
                   </div>
-                  <div className="price-item">
-                    <span className="price-label">Tu precio</span>
-                    <div className="price-input-wrap">
-                      <span className="price-prefix">$</span>
-                      <input className="price-input" value={price} onChange={e => setPrice(e.target.value)} placeholder="0.00" />
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {product.eproloPrice && (
-                    <div className="price-item">
-                      <span className="price-label">eProlo</span>
-                      <span className="price-value cost">${product.eproloPrice.toFixed(2)}</span>
-                    </div>
-                  )}
-                  <div className="price-item">
-                    <span className="price-label">Tu precio</span>
-                    <span className="price-value sell">${sellingPrice.toFixed(2)}</span>
-                  </div>
-                </>
-              )}
+                </div>
+              </div>
+              <input
+                type="range" min={0} max={50} step={1} value={markupPct}
+                onChange={e => setMarkupPct(parseInt(e.target.value))}
+                onMouseUp={() => saveMarkup(markupPct)}
+                onTouchEnd={() => saveMarkup(markupPct)}
+                style={{ width: "100%", accentColor: "#3b82f6", cursor: "pointer" }}
+              />
             </div>
           )}
-          {!isVariation && marginPct !== null && (
+
+          {/* Margin bar — single-price products without markup UI (eProlo price set) */}
+          {!showMarkupUI && marginPct !== null && (
             <div className="margin-bar">
               <span className="margin-label">Margen</span>
               <span className="margin-value" style={{ color: marginColor }}>${margin?.toFixed(2)} · {marginPct}%</span>
