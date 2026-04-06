@@ -2,8 +2,7 @@ import { db, COLLECTIONS, queueCol, settingsDoc, seenCol } from "@/lib/firebase"
 import { getReferenceItemData } from "@/lib/ebay";
 import {
   getVerifiedLeafCategory,
-  fetchRequiredAspects,
-  buildSmartAspects,
+  cleanAndSupplementAspects,
   detectTypeFromTitle,
   CATEGORY_TYPES,
 } from "@/lib/category-aspects";
@@ -200,21 +199,13 @@ async function addFixedPriceItem(product: {
   itemCountry?: string; itemLocation?: string;
 }, userToken: string): Promise<{ itemId: string }> {
 
-  // ── Aspect building: use category-aware builder instead of scattered inline logic ──
-  // This fixes:
-  //   1. "Department/Style missing" for footwear (now always added for footwear types)
-  //   2. "Department/Style on dog collars" (pet types filter out clothing aspects)
-  //   3. Chinese values (stripped inside buildSmartAspects)
-  //   4. Aspects from wrong category (filtered by VALID_ASPECTS per type)
-  const appToken = await getAppToken();
+  // ── Option A: Trust CN seller's aspects, clean + supplement only what's missing ──
+  // The CN seller already published their listing — their aspects are valid.
+  // We clean (strip Chinese, reset Brand/MPN) and supplement only genuinely
+  // missing required fields (e.g. Size Type for footwear, remove clothing
+  // aspects from pet categories). We never filter valid aspects away.
   const categoryType = product.categoryType ?? CATEGORY_TYPES[product.categoryId] ?? detectTypeFromTitle(product.title);
-  const requiredAspectsForCategory = await fetchRequiredAspects(product.categoryId, appToken);
-  const aspects = buildSmartAspects(
-    product.title,
-    categoryType,
-    product.aspects,
-    requiredAspectsForCategory,
-  );
+  const aspects = cleanAndSupplementAspects(product.aspects, product.title, categoryType);
 
   const picturesXml = product.images.slice(0, 12).map(url => `<PictureURL>${escXml(url)}</PictureURL>`).join("");
   const conditionId = ({"New":"1000","New with tags":"1000","New with box":"1000","New without tags":"1500","Like New":"2500","Used":"3000"} as Record<string,string>)[product.condition] ?? "1000";
@@ -535,10 +526,25 @@ Return ONLY this JSON (no markdown):
     } catch { /* use existing publishDesc */ }
   }
 
-  const rawCatId    = refCategoryId || "20625";
-  const { id: publishCatId, type: publishCatType } = await resolveCategory(rawCatId, product.title);
-  let currentCatId   = publishCatId;
-  let currentCatType = publishCatType;
+  // ── Option A: use CN seller's categoryId directly ──────────────────────────
+  // The CN seller published with this category — eBay already accepted it.
+  // We trust it upfront. resolveCategory (API validation) only happens when:
+  //   1. wasImproper retry (CN seller's category might be blocked)
+  //   2. First attempt fails with "leaf" or "category" error (catch handles it)
+  // This saves one Taxonomy API round-trip per product in the happy path.
+  let currentCatId   = refCategoryId || "20625";
+  let currentCatType = CATEGORY_TYPES[currentCatId] ?? detectTypeFromTitle(product.title);
+
+  if (wasImproper && refCategoryId) {
+    // Don't trust CN category on improper retry — override with validated leaf
+    const resolved = await resolveCategory(currentCatId, product.title);
+    currentCatId   = resolved.id;
+    currentCatType = resolved.type;
+    console.log(`[publish] ♻ wasImproper: overriding CN cat ${refCategoryId} → ${currentCatId} (${currentCatType})`);
+  } else {
+    console.log(`[category] Using CN category directly: ${currentCatId} (${currentCatType})`);
+  }
+
   let publishAspects = { ...refAspects };
 
   const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters", "Style", "Department", "Occasion", "Sleeve"];

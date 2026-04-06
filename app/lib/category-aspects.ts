@@ -886,3 +886,133 @@ export function buildSmartAspects(
 
   return aspects;
 }
+
+// ─── Option A: clean + supplement (REPLACES buildSmartAspects in normal flow) ─
+/**
+ * cleanAndSupplementAspects — the "Trust but verify" approach.
+ *
+ * The CN seller already published their listing → their aspects are valid.
+ * We do NOT filter them aggressively. Instead:
+ *
+ *   1. CLEAN: strip Chinese values, reset Brand/MPN, truncate to 65 chars
+ *   2. REMOVE: aspects that genuinely don't belong (e.g. "Department" in pet categories
+ *      when CN seller mislabeled their listing)
+ *   3. SUPPLEMENT: add only what's actually missing (Size Type for footwear,
+ *      Department if absent, etc.)
+ *
+ * This is in contrast to buildSmartAspects which filtered aggressively through
+ * VALID_ASPECTS and often threw away perfectly valid data the CN seller had.
+ */
+export function cleanAndSupplementAspects(
+  refAspects: Record<string, string[]>,
+  title: string,
+  categoryType: CategoryType,
+): Record<string, string[]> {
+  const t = title.toLowerCase();
+  const isChinese = (v: string) => /[\u4e00-\u9fff]/.test(v);
+
+  // ── Step 1: clean refAspects — preserve everything, just sanitize ──────────
+  const aspects: Record<string, string[]> = {};
+  for (const [key, values] of Object.entries(refAspects)) {
+    const cleaned = values
+      .filter((v) => !isChinese(v) && v.trim().length > 0)
+      .map((v) => v.slice(0, 65).trim())
+      .slice(0, 5);
+    if (cleaned.length > 0) aspects[key] = cleaned;
+  }
+
+  // ── Step 2: always override Brand + MPN ────────────────────────────────────
+  // CN seller's brand name would be a violation on our listing
+  aspects["Brand"] = ["Unbranded"];
+  aspects["MPN"]   = ["Does Not Apply"];
+
+  // ── Step 3: category-specific cleanup + supplement ─────────────────────────
+  switch (categoryType) {
+
+    case "footwear_men":
+    case "footwear_women":
+    case "footwear_kids": {
+      // Footwear needs Department, Size Type, Size — supplement only if missing
+      const dept =
+        categoryType === "footwear_men"   ? "Men"   :
+        categoryType === "footwear_women" ? "Women" :
+        t.includes("boy") ? "Boys" : t.includes("girl") ? "Girls" : "Kids";
+
+      if (!aspects["Department"]) aspects["Department"] = [dept];
+      // Override Department if CN seller put wrong gender (e.g. "Women" for men's shoes)
+      // We trust the CATEGORY TYPE (footwear_men/women) more than the CN seller's value
+      else aspects["Department"] = [dept];
+
+      if (!aspects["Size Type"]) aspects["Size Type"] = [
+        t.includes("wide")       ? "Wide"       :
+        t.includes("extra wide") ? "Extra Wide" :
+        t.includes("narrow")     ? "Narrow"     :
+        "Regular"
+      ];
+
+      // Size: required by some eBay footwear categories even for variation products.
+      // Add a representative value only if completely absent (CN might have it).
+      if (!aspects["Size"] && !aspects["US Shoe Size"]) {
+        aspects["Size"] = [dept === "Women" ? "US 7" : "US 9"];
+      }
+
+      if (!aspects["Style"])    aspects["Style"]    = [inferStyle(t, categoryType)];
+      if (!aspects["Occasion"]) aspects["Occasion"] = [inferOccasion(t, categoryType)];
+      break;
+    }
+
+    case "clothing_men":
+    case "clothing_women":
+    case "clothing_kids": {
+      const dept =
+        categoryType === "clothing_men"   ? "Men"   :
+        categoryType === "clothing_women" ? "Women" :
+        t.includes("boy") ? "Boys" : t.includes("girl") ? "Girls" : "Kids";
+      if (!aspects["Department"])    aspects["Department"]    = [dept];
+      if (!aspects["Style"])         aspects["Style"]         = [inferStyle(t, categoryType)];
+      if (!aspects["Sleeve Length"]) aspects["Sleeve Length"] = [inferSleeve(t)];
+      if (!aspects["Occasion"])      aspects["Occasion"]      = [inferOccasion(t, categoryType)];
+      break;
+    }
+
+    case "pet_dog":
+    case "pet_cat":
+    case "pet_generic":
+      // REMOVE clothing-specific aspects — CN sellers sometimes list pet products
+      // in fashion categories, so their refAspects may contain "Department: Women",
+      // "Style: Casual", "Sleeve Length", etc. These cause eBay rejections.
+      delete aspects["Department"];
+      delete aspects["Style"];
+      delete aspects["Sleeve Length"];
+      delete aspects["Neckline"];
+      delete aspects["Occasion"];
+      delete aspects["Pattern"];
+      delete aspects["Heel Type"];
+      delete aspects["Heel Height"];
+      delete aspects["Size Type"];
+      delete aspects["Fastening"];
+      delete aspects["Upper Material"];
+      delete aspects["Toe Shape"];
+      // Supplement pet-specific aspects if missing
+      if (!aspects["Material"]) aspects["Material"] = [inferPetMaterial(t)];
+      if (!aspects["Color"])    aspects["Color"]    = [inferColor(t)];
+      break;
+
+    default:
+      // Generic categories — trust everything from CN, no supplementing needed
+      if (!aspects["Color"])    aspects["Color"]    = [inferColor(t)];
+      if (!aspects["Material"]) aspects["Material"] = [inferMaterial(t)];
+      break;
+  }
+
+  // ── Step 4: final cleanup ──────────────────────────────────────────────────
+  for (const key of Object.keys(aspects)) {
+    aspects[key] = aspects[key]
+      .filter((v) => !isChinese(v) && v.trim().length > 0)
+      .map((v) => v.slice(0, 65).trim())
+      .slice(0, 5);
+    if (aspects[key].length === 0) delete aspects[key];
+  }
+
+  return aspects;
+}
