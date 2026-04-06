@@ -102,6 +102,7 @@ chain → "metal link" or "steel collar", choke → "standard" or "flat",
 shock → "vibration" or omit, prong → "textured" or omit,
 strip → "band" or "tape", hard → "firm" or "sturdy",
 tight → "snug" or "secure", drag → "slip-on" or "backless",
+clamp → "grip" or "bracket" or "arm", clamping → "gripping" or "securing",
 whip, bang, thrust, penetrate, climax, bondage, fetish, restraint → never use
 male (apparel) → "men's"
 
@@ -520,6 +521,8 @@ WORDS TO NEVER USE (flagged by eBay, even for pet/household products):
 - bang, blast, thrust, penetrate, climax → never use
 - bondage, fetish, restraint → never use
 - drag → use "pull-on" or "slip-on" or "backless"
+- clamp → use "grip" or "bracket" or "holder arm"
+- clamping → use "gripping" or "securing" or "auto-securing"
 - male (for clothing/shoes) → use "men's" or "men"
 
 ${isForPets ? `REQUIRED for pet products:

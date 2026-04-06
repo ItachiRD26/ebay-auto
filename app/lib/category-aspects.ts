@@ -107,7 +107,9 @@ export const CATEGORY_TYPES: Record<string, CategoryType> = {
   "92074": "home_decor",     // Frames
   "116656":"home_decor",     // Vases & Decorative Bowls
   // ── Electronics ───────────────────────────────────────────────────────────
-  "116458":"electronics",    // Cell Phone Mounts
+  // NOTE: 116458 (Cell Phone Mounts) is NOT a leaf — removed from map.
+  // 19591 (Lighting Kits) is returned by Taxonomy API for phone mount queries
+  // but is WRONG — overridden in getVerifiedLeafCategory.
   "139762":"electronics",    // Outlet Adapters
   // ── Sports ────────────────────────────────────────────────────────────────
   "158902":"sports",         // Fitness Equipment
@@ -225,8 +227,10 @@ export function matchCategoryByTitle(title: string): CategoryMatch {
   }
 
   // ── Electronics ───────────────────────────────────────────────────────────
-  if (t.includes("phone stand") || t.includes("phone holder") || t.includes("phone mount"))
-    return { id: "116458", type: "electronics" };
+  // NOTE: 116458 (Cell Phone Mounts) returns 400 — it is NOT a leaf category.
+  // The Taxonomy API often suggests 19591 (Lighting Kits) for phone mount queries
+  // which is completely wrong. We fall through to Taxonomy API for phone mounts
+  // and let getVerifiedLeafCategory handle it, with the 19591 override below.
   if (t.includes("adapter") || t.includes("converter") || t.includes("plug"))
     return { id: "139762", type: "electronics" };
 
@@ -377,13 +381,28 @@ export async function getVerifiedLeafCategory(
       // scrutiny. If the title has no bark/shock/training signals, use 116381 instead.
       const isBarkCollarSuggestion = suggested === "66774";
       const titleHasBarkSignals = /bark|shock|static|electric|training collar|remote collar|e-collar|anti.?bark/i.test(title);
-      const finalSuggested = (isBarkCollarSuggestion && !titleHasBarkSignals) ? "116381" : suggested;
-      if (finalSuggested !== suggested) {
+      // Override: Taxonomy API returns 19591 (Lighting Kits) for phone mount queries —
+      // completely wrong. Fall through to original CN category or use a known electronics leaf.
+      const isLightingKitsSuggestion = suggested === "19591";
+      const titleHasLightingSignals = /light kit|led kit|lighting kit|underglow|light strip/i.test(title);
+
+      let finalSuggested = suggested;
+      if (isBarkCollarSuggestion && !titleHasBarkSignals) {
+        finalSuggested = "116381";
         console.log(`[category] Overriding 66774 (Bark Collars) → 116381 (Dog Collars & Tags) — no bark signals in title`);
+      } else if (isLightingKitsSuggestion && !titleHasLightingSignals) {
+        // For phone mounts / car mounts, use CN seller's original category directly —
+        // it's more reliable than a wrong Taxonomy API suggestion.
+        // Return null so getVerifiedLeafCategory falls through to the original CN category.
+        console.log(`[category] Overriding 19591 (Lighting Kits) → skipping, will use CN category — no lighting signals`);
+        finalSuggested = "";
       }
-      const suggestedType = CATEGORY_TYPES[finalSuggested] ?? detectTypeFromTitle(title);
-      console.log(`[category] Taxonomy suggestion: ${finalSuggested} (${suggestedType})`);
-      return { id: finalSuggested, type: suggestedType };
+
+      if (finalSuggested) {
+        const suggestedType = CATEGORY_TYPES[finalSuggested] ?? detectTypeFromTitle(title);
+        console.log(`[category] Taxonomy suggestion: ${finalSuggested} (${suggestedType})`);
+        return { id: finalSuggested, type: suggestedType };
+      }
     }
   } catch (e) {
     console.warn("[category] Taxonomy API error:", e);
@@ -1002,10 +1021,25 @@ export function cleanAndSupplementAspects(
       if (!aspects["Color"])    aspects["Color"]    = [inferColor(t)];
       break;
 
-    default:
-      // Generic categories — trust everything from CN, no supplementing needed
-      if (!aspects["Color"])    aspects["Color"]    = [inferColor(t)];
-      if (!aspects["Material"]) aspects["Material"] = [inferMaterial(t)];
+    case "electronics":
+      // Remove clothing/footwear aspects if CN seller mislabeled
+      delete aspects["Department"];
+      delete aspects["Style"];
+      delete aspects["Size Type"];
+      delete aspects["Sleeve Length"];
+      // Type is required in many electronics categories
+      if (!aspects["Type"]) {
+        if (t.includes("mount") || t.includes("holder") || t.includes("stand"))
+          aspects["Type"] = [t.includes("car") || t.includes("vehicle") ? "Car Mount" : "Phone Stand"];
+        else if (t.includes("charger") || t.includes("charging"))
+          aspects["Type"] = [t.includes("wireless") ? "Wireless Charger" : "Car Charger"];
+        else if (t.includes("cable"))    aspects["Type"] = ["USB Cable"];
+        else if (t.includes("adapter"))  aspects["Type"] = ["Power Adapter"];
+        else if (t.includes("case"))     aspects["Type"] = ["Phone Case"];
+        else if (t.includes("screen"))   aspects["Type"] = ["Screen Protector"];
+        else aspects["Type"] = ["Other"];
+      }
+      if (!aspects["Color"]) aspects["Color"] = [inferColor(t)];
       break;
   }
 
