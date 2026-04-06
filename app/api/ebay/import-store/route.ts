@@ -1,491 +1,335 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAppToken, getUserToken } from "@/lib/ebay";
+import { getUserToken } from "@/lib/ebay";
 import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS } from "@/lib/firebase";
 import { QueueProduct, Settings } from "@/types";
-// Flat fallback keywords if no category known
-const DEFAULT_SCAN_KEYWORDS = [
- "travel organizer","packing cube","compression bag",
-  "toiletry bag","passport holder","luggage tag",
 
-];
-
-// ─── Same filters as search route ────────────────────────────────────────────
+// ─── Config — 5× more relaxed than search ────────────────────────────────────
+// The store itself is the quality signal. Individual items don't need validation.
 const CONFIG = {
-  MIN_PRICE:      20,
-  MAX_PRICE:      250,
-  MIN_SOLD_TOTAL: 5,    // min all-time sales
-  MIN_SOLD_30D:   3,    // min estimated sales last 30 days
+  MIN_PRICE:      10,    // was 20
+  MAX_PRICE:      500,   // was 250
+  MIN_SOLD:       1,     // was 5 — use GetSellerList's own QuantitySold
   MARKUP_PERCENT: 6,
   STOCK:          1,
-  MAX_VARIATIONS: 30,   // skip listings with too many variants
+  MAX_ITEMS:      1000,
+  MAX_PAGES:      20,    // 200 items/page × 20 = 4000 max scanned
 };
 
-const _storeTokens: Record<string, { token: string; fetchedAt: number }> = {};
-
-async function getTradingData(numericId: string, storeId: string): Promise<{ soldCount: number; estimatedSold30d: number; listingAgeDays: number; shipFromCountry: string | null; variationCount: number }> {
-  const empty = { soldCount: 0, estimatedSold30d: 0, listingAgeDays: 0, shipFromCountry: null, variationCount: 0 };
-
-  // ── Try Marketplace Insights API first (no user token, real sold data) ──────
-  try {
-    const { getAppToken } = await import("@/lib/ebay");
-    const appToken = await getAppToken();
-
-    const params = new URLSearchParams({ q: numericId, limit: "1", fieldgroups: "ADDITIONAL_SELLER_DETAILS" });
-    const res = await fetch(
-      `https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search?${params}`,
-      {
-        headers: { Authorization: `Bearer ${appToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
-        signal: AbortSignal.timeout(8000),
-      }
-    );
-
-    if (res.ok) {
-      const data = await res.json() as { itemSales?: { soldQuantity?: number; lastSoldDate?: string; itemLocation?: { country?: string } }[] };
-      const sale = data.itemSales?.[0];
-      if (sale) {
-        const soldQty        = sale.soldQuantity ?? 0;
-        const lastSold       = sale.lastSoldDate ? new Date(sale.lastSoldDate) : null;
-        const daysSinceSold  = lastSold ? (Date.now() - lastSold.getTime()) / 86400000 : 999;
-        const estimatedSold30d = daysSinceSold < 30 ? Math.max(1, Math.round(soldQty * 0.3)) :
-                                 daysSinceSold < 60 ? Math.max(1, Math.round(soldQty * 0.15)) :
-                                 daysSinceSold < 90 ? Math.round(soldQty * 0.08) : 0;
-        return { soldCount: soldQty, estimatedSold30d, listingAgeDays: daysSinceSold, shipFromCountry: sale.itemLocation?.country ?? null, variationCount: 0 };
-      }
-    }
-  } catch { /* fall through to Trading API */ }
-
-  // ── Fallback: Trading API GetItem ─────────────────────────────────────────
-  try {
-    if (!_storeTokens[storeId] || Date.now() - _storeTokens[storeId].fetchedAt > 55_000) {
-      try { _storeTokens[storeId] = { token: await getUserToken(storeId), fetchedAt: Date.now() }; }
-      catch { return empty; }
-    }
-    const _userToken = _storeTokens[storeId].token;
-    const xml = `<?xml version="1.0" encoding="utf-8"?>
-<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <RequesterCredentials><eBayAuthToken>${_userToken}</eBayAuthToken></RequesterCredentials>
-  <ItemID>${numericId}</ItemID>
-  <DetailLevel>ItemReturnDescription</DetailLevel>
-</GetItemRequest>`;
-    const res = await fetch("https://api.ebay.com/ws/api.dll", {
-      method: "POST",
-      headers: { "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "967", "X-EBAY-API-CALL-NAME": "GetItem", "Content-Type": "text/xml" },
-      body: xml, signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return empty;
-    const text = await res.text();
-    if (text.includes("<Ack>Failure</Ack>")) return empty;
-    const soldMatch  = text.match(/<QuantitySold>(\d+)<\/QuantitySold>/);
-    const soldCount  = soldMatch ? parseInt(soldMatch[1], 10) : 0;
-    const startMatch = text.match(/<StartTime>(.*?)<\/StartTime>/);
-    let estimatedSold30d = soldCount;
-    let listingAgeDays   = 0;
-    if (startMatch) {
-      listingAgeDays = Math.max(1, (Date.now() - new Date(startMatch[1]).getTime()) / 86400000);
-      const soldPerDay = soldCount / listingAgeDays;
-      const decay = listingAgeDays > 730 ? 0.35 : listingAgeDays > 365 ? 0.50 : listingAgeDays > 180 ? 0.65 : listingAgeDays > 90 ? 0.80 : 1.0;
-      estimatedSold30d = Math.round(soldPerDay * 30 * decay);
-    }
-    const varMatches     = text.match(/<Variation>/g);
-    const variationCount = varMatches ? varMatches.length : 0;
-    const countryMatch   = text.match(/<Country>(.*?)<\/Country>/);
-    const shipFromCountry = countryMatch ? countryMatch[1].trim() : null;
-    return { soldCount, estimatedSold30d, listingAgeDays, shipFromCountry, variationCount };
-  } catch { return empty; }
-}
-
-
-const EXCLUDED_KEYWORDS = [
-  "iphone","samsung galaxy","apple watch","airpods","macbook","playstation","xbox",
-  "nintendo switch","nvidia","radeon","graphics card","laptop","smart tv","ipad",
+// ─── Slim excluded keywords — only hard IP / adult / dangerous blockers ────────
+const BLOCKED_IP = [
   "nike","adidas","gucci","louis vuitton","supreme","yeezy","jordan","off-white",
-  "balenciaga","versace","prada","dior","burberry","chanel","hermes","fendi","lululemon",
-  "north face","under armour","new balance","reebok","vans","converse","timberland",
-  "owala","stanley cup","hydro flask","yeti","contigo","nalgene","camelbak",
-  "anime","manga","naruto","dragon ball","one piece","demon slayer","attack on titan","pokemon","waifu",
-  "tony chopper","luffy","zoro","nami","sanji","nico robin","franky","brook","usopp",
-  "playmat","playing mat","trading card game mat","tcg mat","ccg mat","card game mat",
-  "opcg","tcg","ccg","yugioh","yu-gi-oh","magic the gathering","mtg","flesh and blood",
-  "dragon shield","ultra pro","card sleeve","card mat","card game","board game mat",
-  "mercedes","mercedes-benz","bmw","audi","porsche","ferrari","lamborghini","maserati",
-  "ford","chevrolet","chevy","dodge","jeep","tesla","honda","toyota","nissan","hyundai",
-  "volkswagen","volvo","lexus","infiniti","cadillac","buick","lincoln","ram truck",
-  "subaru","mazda","mitsubishi","kia","acura","genesis","alfa romeo","bentley","rolls royce",
-  "replica","counterfeit","fake","gun","firearm","ammo","ammunition","rifle","pistol",
-  "polo","ralph lauren","lacoste","tommy hilfiger","calvin klein","hugo boss",
-  "michael kors","coach","kate spade","marc jacobs","tommy","nautica","izod",
-  "charlotte","victoria secret","victoria's secret","fredericks","fredericks of hollywood",
-  "maxlone","meguiar","turtle wax","armor all","mothers","chemical guys",
-  "car spray","car wax","car polish","car detailing","car cleaner","car shampoo",
-  "waterless wash","quick detailer","paint sealant","ceramic coat","car coating",
-  "car freshener","car deodorizer","windshield cleaner","wheel cleaner","tire shine",
-  "triphene","spray wipe","car care","auto care","auto detailing",
-  "starbucks","nespresso","keurig","nescafe","lavazza","dunkin","red bull","monster energy",
-  "coca cola","pepsi","heineken","corona","budweiser","jack daniels","johnnie walker",
-  "face cream","moisturizer","serum","perfume","cologne","deodorant","antiperspirant",
-  "body lotion","body cream","sunscreen","spf","retinol","vitamin c cream","eye cream",
-  "anti-aging","anti aging","wrinkle","dark spot","whitening cream","bleaching",
-  "toner","essence","ampoule","bb cream","cc cream","foundation","concealer",
-  "lipstick","lip gloss","eyeshadow","mascara","blush","highlighter","powder makeup",
-  "hair dye","hair color","keratin","shampoo","conditioner","hair mask","hair oil",
-  "body wash","shower gel","bath bomb","soap bar","hand cream","foot cream",
-  "wire","cable","awg","stranded","insulated","pvc wire","coaxial","ethernet cable",
-  "breadboard","arduino","raspberry pi","esp32","sensor","module","led strip driver",
-  "battery pack","lithium","18650","charger module","buck converter","voltage",
-  "oscilloscope","multimeter","soldering","flux","pcb board","prototype",
-  "toy","lego","action figure","doll","barbie","stuffed animal","toy car","toy gun",
-  "toy part","toy accessory","playset","building block",
-  "dildo","vibrator","sex toy","anal","butt plug","penis","enlargement","erection",
-  "male enhancement","adult toy","lubricant","condom","lingerie",
-  "pump","diaphragm","impeller","valve","compressor","capacitor","resistor","transistor",
-  "motherboard","circuit","pcb","ic chip","relay","solenoid","actuator","servo",
-  "replacement part","spare part","repair kit","oem","aftermarket","compatible with",
-  "wiring harness","fuse","transformer","power supply","inverter","heat sink",
-  "catheter","incontinence","colostomy","stoma","dialysis","surgical",
-  "hearing aid","cpap","nebulizer","syringe","insulin",
-  "dental","dentist","orthodontic","tooth whitening","teeth whitening","mouthguard",
-  "retainer","braces","aligner","whitening strips","dental bib","toothpaste",
-  "extender","traction device","male enlarger","pro extender","apexdrive","apex drive",
-  "bigger growth","penile","erectile","male enhancement device","cock ring","chastity",
-  "electric massager","massage gun","percussion massager","vibrating massager",
-  "body massager","handheld massager","muscle massager","deep tissue massager",
-  "tens unit","ems machine","muscle stimulator","electro stimulator",
-  "infrared massager","heating massager","foot massager","neck massager",
-  "back massager","eye massager","scalp massager electric","massage wand",
-  "compression sleeve","medical grade","orthopedic","therapeutic","clinical",
-  "blood pressure","pulse oximeter","glucose","ecg","ekg","stethoscope",
-  "wound care","bandage","splint","brace medical",
-  "hyaluronic","niacinamide","peptide cream","kojic acid","salicylic","glycolic",
-  "aha bha","chemical peel","microneedling","derma roller","led face mask",
-  "microcurrent","rf skin","ultrasonic skin","anti wrinkle device","skin tightening",
-  "photon therapy","collagen machine","ipl hair removal","laser hair","epilation device",
-  "hair removal device","upgrade kit","3d printed","head upgrade","weapon kit",
-  "arm upgrade","wing kit","transformers","optimus prime","megatron","gundam",
-  "model kit","figure kit","resin kit","conversion kit","add-on kit","parts kit",
-  "injection molding","abs upgrade","pvc figure","diecast","figurine kit",
-  "killing arm","onyx prime","ss86","age of the primes",
-  "food","snack","candy","chocolate","coffee beans","tea leaves","protein powder",
-  "supplement","vitamin","seeds","plant","succulent","cactus","flower bouquet",
-  "live plant","fruit","vegetable","edible","gummies","jerky","spices","herbs","seasoning",
+  "balenciaga","versace","prada","dior","burberry","chanel","hermes","fendi",
+  "lululemon","north face","under armour","reebok","vans","converse","timberland",
+  "ralph lauren","lacoste","tommy hilfiger","calvin klein","hugo boss",
+  "michael kors","coach","kate spade","marc jacobs","rolex","omega watch","cartier",
+  "iphone","samsung galaxy","apple watch","airpods","macbook","ipad",
+  "playstation","xbox","nintendo switch","nvidia","radeon",
+  "owala","stanley cup","hydro flask","yeti","contigo","camelbak",
+  "naruto","dragon ball","one piece","demon slayer","pokemon",
+  "yugioh","yu-gi-oh","magic the gathering","lego","disney","marvel","barbie",
+  "mercedes","bmw","audi","porsche","ferrari","lamborghini","tesla",
+  "dildo","vibrator","sex toy","anal","penis enlargement","male enhancement",
+  "adult toy","cock ring","chastity","gun","firearm","ammunition","rifle","pistol",
+  "replica","counterfeit","fake",
 ];
 
-function isChina(country: string | null | undefined): boolean {
-  if (!country) return false;
-  return ["CN","HK","TW"].includes(country.toUpperCase());
-}
-
-function isBanned(title: string): boolean {
+function isBanned(title: string, extra: string[]): boolean {
   const t = title.toLowerCase();
-  return EXCLUDED_KEYWORDS.some(kw => t.includes(kw));
+  return [...BLOCKED_IP, ...extra].some(kw => kw && t.includes(kw));
 }
 
-// ─── Extract seller username from any eBay store/seller URL ──────────────────
-function extractSeller(url: string): string | null {
-  url = url.trim();
-  // https://www.ebay.com/str/sellername
-  const strMatch = url.match(/ebay\.com\/str\/([^/?&#]+)/i);
-  if (strMatch) return strMatch[1];
-  // https://www.ebay.com/sch/i.html?_ssn=sellername
-  const ssnMatch = url.match(/[?&]_ssn=([^&]+)/i);
+// ─── Parse seller username from any eBay URL format ──────────────────────────
+export function extractSeller(input: string): string | null {
+  const s = input.trim();
+  const strMatch = s.match(/ebay\.com\/str\/([^/?&#\s]+)/i);
+  if (strMatch) return decodeURIComponent(strMatch[1]);
+  const ssnMatch = s.match(/[?&]_ssn=([^&\s]+)/i);
   if (ssnMatch) return decodeURIComponent(ssnMatch[1]);
-  // https://www.ebay.com/usr/sellername
-  const usrMatch = url.match(/ebay\.com\/usr\/([^/?&#]+)/i);
-  if (usrMatch) return usrMatch[1];
-  // bare username
-  if (/^[a-z0-9_\-\.]+$/i.test(url) && !url.includes('/')) return url;
+  const usrMatch = s.match(/ebay\.com\/usr\/([^/?&#\s]+)/i);
+  if (usrMatch) return decodeURIComponent(usrMatch[1]);
+  if (/^[\w\-\.]+$/.test(s) && !s.includes("/")) return s;
   return null;
 }
 
-// ─── Fetch seller listings via GetSellerList (Trading API — no keywords needed) ─
-// Returns ALL active listings from a seller, paginated by EntriesPerPage + PageNumber
-async function fetchSellerPage(seller: string, page: number, userToken: string): Promise<{
-  items: { itemId: string; title: string; price: number; shippingCost: number; sold: number; startTime: string; categoryId: string; pic: string }[];
-  hasMore: boolean;
-  total: number;
-}> {
-  const PAGE_SIZE = 200;
+// ─── Fetch one page of seller listings via GetSellerList ─────────────────────
+// GetSellerList already includes QuantitySold per item — zero extra API calls needed.
+interface SellerItem {
+  itemId:        string;
+  title:         string;
+  price:         number;
+  shippingCost:  number;
+  sold:          number;
+  startTime:     string;
+  categoryId:    string;
+  pic:           string;
+  condition:     string;
+}
+
+async function fetchSellerPage(
+  seller: string,
+  page: number,
+  userToken: string,
+): Promise<{ items: SellerItem[]; hasMore: boolean; total: number }> {
+  const now    = new Date().toISOString();
+  const future = new Date(Date.now() + 120 * 86400000).toISOString();
+
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <GetSellerListRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
   <UserID>${seller}</UserID>
   <ActiveList>true</ActiveList>
   <ListingType>FixedPriceItem</ListingType>
+  <GranularityLevel>Fine</GranularityLevel>
   <Pagination>
-    <EntriesPerPage>${PAGE_SIZE}</EntriesPerPage>
+    <EntriesPerPage>200</EntriesPerPage>
     <PageNumber>${page}</PageNumber>
   </Pagination>
-  <DetailLevel>ReturnAll</DetailLevel>
-  <EndTimeFrom>${new Date().toISOString()}</EndTimeFrom>
-  <EndTimeTo>${new Date(Date.now() + 90 * 86400000).toISOString()}</EndTimeTo>
+  <EndTimeFrom>${now}</EndTimeFrom>
+  <EndTimeTo>${future}</EndTimeTo>
+  <IncludeVariations>false</IncludeVariations>
 </GetSellerListRequest>`;
 
-  const res = await fetch("https://api.ebay.com/ws/api.dll", {
-    method: "POST",
-    headers: {
-      "X-EBAY-API-SITEID": "0",
-      "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
-      "X-EBAY-API-CALL-NAME": "GetSellerList",
-      "Content-Type": "text/xml",
-    },
-    body: xml,
-    signal: AbortSignal.timeout(30000),
-  });
+  try {
+    const res = await fetch("https://api.ebay.com/ws/api.dll", {
+      method: "POST",
+      headers: {
+        "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "X-EBAY-API-CALL-NAME": "GetSellerList",
+        "Content-Type": "text/xml",
+      },
+      body: xml,
+      signal: AbortSignal.timeout(30000),
+    });
 
-  const text = await res.text();
-  if (!res.ok || text.includes("<Ack>Failure</Ack>")) {
-    console.warn(`[import-store] GetSellerList page ${page} failed`);
+    const text = await res.text();
+
+    if (!res.ok || text.includes("<Ack>Failure</Ack>")) {
+      const errMsg = text.match(/<LongMessage>(.*?)<\/LongMessage>/)?.[1] ?? "unknown";
+      console.warn(`[import-store] GetSellerList p${page} failed: ${errMsg.slice(0, 100)}`);
+      return { items: [], hasMore: false, total: 0 };
+    }
+
+    const totalPages   = parseInt(text.match(/<TotalNumberOfPages>(\d+)<\/TotalNumberOfPages>/)?.[1] ?? "1", 10);
+    const totalEntries = parseInt(text.match(/<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/)?.[1] ?? "0", 10);
+
+    const itemBlocks = text.match(/<Item>[\s\S]*?<\/Item>/g) ?? [];
+
+    const items: SellerItem[] = itemBlocks.flatMap(block => {
+      const get = (tag: string) =>
+        block.match(new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`))?.[1]?.trim() ?? "";
+
+      const itemId = get("ItemID");
+      const title  = get("Title");
+      if (!itemId || !title) return [];
+
+      const priceRaw =
+        block.match(/<ConvertedCurrentPrice[^>]*>([\d.]+)<\/ConvertedCurrentPrice>/)?.[1] ||
+        block.match(/<CurrentPrice[^>]*>([\d.]+)<\/CurrentPrice>/)?.[1] ||
+        block.match(/<BuyItNowPrice[^>]*>([\d.]+)<\/BuyItNowPrice>/)?.[1] ||
+        block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] ||
+        "0";
+      const price = parseFloat(priceRaw) || 0;
+
+      const sold = parseInt(get("QuantitySold") || "0", 10);
+
+      const shippingCost =
+        parseFloat(block.match(/<ShippingServiceCost[^>]*>([\d.]+)<\/ShippingServiceCost>/)?.[1] ?? "0") || 0;
+
+      const startTime  = get("StartTime");
+      const categoryId = get("CategoryID");
+      const pic        = block.match(/<PictureURL>(https?:\/\/[^<]+)<\/PictureURL>/)?.[1]?.trim() ?? "";
+      const condition  = get("ConditionDisplayName") || (get("ConditionID") === "1000" ? "New" : "Used");
+
+      return [{ itemId, title, price, shippingCost, sold, startTime, categoryId, pic, condition }];
+    });
+
+    return { items, hasMore: page < totalPages, total: totalEntries };
+  } catch (e) {
+    console.warn(`[import-store] fetchSellerPage error:`, e);
     return { items: [], hasMore: false, total: 0 };
   }
-
-  // Parse total pages
-  const totalPagesMatch = text.match(/<TotalNumberOfPages>(\d+)<\/TotalNumberOfPages>/);
-  const totalEntriesMatch = text.match(/<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/);
-  const totalPages = totalPagesMatch ? parseInt(totalPagesMatch[1], 10) : 1;
-  const total = totalEntriesMatch ? parseInt(totalEntriesMatch[1], 10) : 0;
-
-  // Extract all <Item> blocks
-  const itemBlocks = text.match(/<Item>([\s\S]*?)<\/Item>/g) ?? [];
-  const items = itemBlocks.map(block => {
-    const get = (tag: string) => block.match(new RegExp(`<${tag}>(.*?)<\/${tag}>`))?.[1]?.trim() ?? "";
-    const itemId    = get("ItemID");
-    const title     = get("Title");
-    const price     = get("CurrentPrice") || get("StartPrice") || "0";
-    const quantity  = parseInt(get("Quantity") || "1", 10);
-    const sold      = parseInt(get("QuantitySold") || "0", 10);
-    const startTime = get("StartTime");
-    const categoryId = get("CategoryID");
-    // Get first picture
-    const picMatch  = block.match(/<PictureURL>(.*?)<\/PictureURL>/);
-    const pic       = picMatch?.[1]?.trim() ?? "";
-    // Shipping
-    const shippingCostMatch = block.match(/<ShippingServiceCost[^>]*>(.*?)<\/ShippingServiceCost>/);
-    const shippingCost = parseFloat(shippingCostMatch?.[1] ?? "0") || 0;
-
-    return { itemId, title, price: parseFloat(price), shippingCost, quantity, sold, startTime, categoryId, pic };
-  }).filter(i => i.itemId && i.title);
-
-  return { items: items as never, hasMore: page < totalPages, total };
 }
 
-
-// ─── Process a single item from Browse API ───────────────────────────────────
-async function processItem(
-  item: Record<string, unknown>,
-  settings: Settings,
-  seller: string,
-  storeId: string,
-  userId: string,
-  _htmlSoldCount?: number
-): Promise<{ added: boolean; reason: string; title: string }> {
-  const title      = (item.title as string) ?? "";
-  const shortTitle = title.slice(0, 50);
-  const rawId      = (item.itemId as string) ?? "";
-  const numericId  = rawId.split("|")[1] ?? rawId;
-
-  // Price check
-  const ebayRefPrice    = parseFloat((item.price as { value: string })?.value ?? "0");
-  const shippingCost    = parseFloat((item.shippingOptions as { shippingCost?: { value: string } }[] | undefined)?.[0]?.shippingCost?.value ?? "0");
-  const totalMarketCost = ebayRefPrice + shippingCost;
-  const minPrice = settings.minPrice ?? CONFIG.MIN_PRICE;
-  const maxPrice = settings.maxPrice ?? CONFIG.MAX_PRICE;
-  if (ebayRefPrice < minPrice || ebayRefPrice > maxPrice)
-    return { added: false, reason: `precio $${ebayRefPrice} fuera de rango`, title: shortTitle };
-
-  // Banned keywords
-  if (isBanned(title)) return { added: false, reason: "banned", title: shortTitle };
-
-  // China origin check from Browse API
-  const summaryCountry = (item.itemLocation as { country?: string })?.country ?? "";
-  if (summaryCountry && !isChina(summaryCountry))
-    return { added: false, reason: `pais ${summaryCountry}`, title: shortTitle };
-
-  // Duplicate check by itemId
-  const dup = await queueCol(userId).where("ebayItemId", "==", numericId).limit(1).get();
-  if (!dup.empty) return { added: false, reason: "duplicado", title: shortTitle };
-
-  // Duplicate check by normalized title
-  const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
-  const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
-  if (!titleDup.empty) return { added: false, reason: "titulo duplicado", title: shortTitle };
-
-  // Trading API: sales, country, variations
-  const td = await getTradingData(numericId, storeId);
-
-  if (td.shipFromCountry && !isChina(td.shipFromCountry))
-    return { added: false, reason: `pais-trading ${td.shipFromCountry}`, title: shortTitle };
-
-  if (td.variationCount > CONFIG.MAX_VARIATIONS)
-    return { added: false, reason: `demasiadas variantes (${td.variationCount}/${CONFIG.MAX_VARIATIONS} max)`, title: shortTitle };
-
-  if (td.soldCount < CONFIG.MIN_SOLD_TOTAL)
-    return { added: false, reason: `${td.soldCount} ventas < min ${CONFIG.MIN_SOLD_TOTAL}`, title: shortTitle };
-
-  if (td.estimatedSold30d < CONFIG.MIN_SOLD_30D)
-    return { added: false, reason: `~${td.estimatedSold30d}/30d < min ${CONFIG.MIN_SOLD_30D}`, title: shortTitle };
-
-  // Compute suggested price
-  const markupPercent       = settings.markupPercent ?? CONFIG.MARKUP_PERCENT;
-  const suggestedSellingPrice = parseFloat((totalMarketCost * (1 + markupPercent / 100)).toFixed(2));
-
-  const imageUrls: string[] =
-    (item.thumbnailImages as { imageUrl: string }[])?.map(i => i.imageUrl) ||
-    ((item.image as { imageUrl: string })?.imageUrl ? [(item.image as { imageUrl: string }).imageUrl] : []);
-
-  const condition  = (item.condition as string) ?? "New";
-  const categoryId = (item.categories as { categoryId: string }[])?.[0]?.categoryId ?? "";
-
-  const product: Omit<QueueProduct, "id"> = {
-    ebayItemId:           numericId,
-    title,
-    normalizedTitle,
-    images:               imageUrls,
-    userId,
-    storeId,
-    ebayReferencePrice:   ebayRefPrice,
-    ebayShippingCost:     shippingCost,
-    totalMarketCost,
-    refPriceMin:          ebayRefPrice,
-    refPriceMax:          ebayRefPrice,
-    eproloPrice:          null,
-    eproloUrl:            null,
-    suggestedSellingPrice,
-    markupPercent:        Math.round(markupPercent),
-    stock:                CONFIG.STOCK,
-    condition,
-    categoryId,
-    categoryName:         "",
-    soldCount:            td.soldCount,
-    estimatedSold30d:     td.estimatedSold30d,
-    listingAgeDays:       td.listingAgeDays,
-    sourceUrl:            `https://www.ebay.com/itm/${numericId}`,
-    description:          "",
-    margin:               null,
-    marginPercent:        null,
-    status:               "approved",
-    createdAt:            Date.now(),
-    updatedAt:            Date.now(),
-  };
-
-  await queueCol(userId).add(product);
-  return { added: true, reason: "ok", title: shortTitle };
-}
-
-// ─── POST handler ─────────────────────────────────────────────────────────────
+// ─── POST /api/ebay/import-store ─────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    const { storeUrl, category, storeId, userId } = await req.json() as { storeUrl: string; category?: string; storeId: string; userId: string };
+    const body = await req.json() as {
+      storeUrl: string;
+      storeId:  string;
+      userId:   string;
+      status?:  "pending" | "approved";
+    };
+
+    const { storeUrl, storeId, userId } = body;
+    const importStatus = body.status ?? "pending"; // default pending — user reviews before publish
+
     if (!storeUrl) return NextResponse.json({ error: "storeUrl requerida" }, { status: 400 });
-    if (!storeId)  return NextResponse.json({ error: "storeId required" },  { status: 400 });
-    if (!userId)   return NextResponse.json({ error: "userId required" },   { status: 400 });
+    if (!storeId)  return NextResponse.json({ error: "storeId required" },   { status: 400 });
+    if (!userId)   return NextResponse.json({ error: "userId required" },    { status: 400 });
 
     const seller = extractSeller(storeUrl);
-    if (!seller) return NextResponse.json({ error: "No se pudo extraer el nombre del vendedor de la URL" }, { status: 400 });
+    if (!seller) {
+      return NextResponse.json(
+        { error: "URL inválida. Pega el link de la tienda (ebay.com/str/seller) o el username directamente." },
+        { status: 400 }
+      );
+    }
 
-    console.log(`\n[import-store] 🏪 Importando tienda: ${seller}`);
+    console.log(`\n[import-store] 🏪 "${seller}" — importando, status="${importStatus}"`);
 
-    // Load settings + user blocked keywords from Firestore
+    // ── Load settings ───────────────────────────────────────────────────────
     const [settingsSnap, kwSnap] = await Promise.all([
       getSettingsDoc(userId, "main").get(),
       db.collection("users").doc(userId).collection("settings").doc("keywords").get(),
     ]);
-    const settings = (settingsSnap.exists ? settingsSnap.data() as unknown : DEFAULT_SETTINGS) as Settings;
-    const kwData = kwSnap.data() as { excludedKeywords?: string[] } | undefined;
-    // Merge user's blocked keywords with the hardcoded list
-    const userBlockedKws = kwData?.excludedKeywords ?? [];
-    const allBlockedKws  = [...new Set([...EXCLUDED_KEYWORDS, ...userBlockedKws.map(k => k.toLowerCase().trim())])];
-    const isBannedDynamic = (title: string) => {
-      const t = title.toLowerCase();
-      return allBlockedKws.some(kw => kw && t.includes(kw));
-    };
+    const settings    = (settingsSnap.exists ? settingsSnap.data() : DEFAULT_SETTINGS) as Settings;
+    const markupPct   = settings.markupPercent ?? CONFIG.MARKUP_PERCENT;
+    const minPrice    = settings.minPrice  ?? CONFIG.MIN_PRICE;
+    const maxPrice    = settings.maxPrice  ?? CONFIG.MAX_PRICE;
+    // 5× more relaxed than normal search min sold
+    const minSold     = Math.max(1, Math.floor((settings.minSoldCount ?? 5) / 5));
 
-    // ── GetSellerList: paginate through ALL seller listings, filter by price+sales ──
-    const MAX_ITEMS_PER_STORE = 2000;
-    const MAX_PAGES           = 20;
-    const minPrice  = settings.minPrice  ?? CONFIG.MIN_PRICE;
-    const maxPrice  = settings.maxPrice  ?? CONFIG.MAX_PRICE;
-    const minSold   = settings.minSoldCount ?? CONFIG.MIN_SOLD_TOTAL;
-    const minSold30 = settings.minSold30d   ?? CONFIG.MIN_SOLD_30D;
+    const userBlocked = (kwSnap.data() as { excludedKeywords?: string[] } | undefined)?.excludedKeywords ?? [];
+    const extraBlocked = userBlocked.map(k => k.toLowerCase().trim()).filter(Boolean);
 
-    console.log(`[import-store] 📦 GetSellerList: price $${minPrice}-$${maxPrice} | min sold ${minSold} | min/30d ${minSold30}`);
-
+    // ── Connect user account ────────────────────────────────────────────────
     let userToken: string;
     try {
       userToken = await getUserToken(storeId);
     } catch {
-      return NextResponse.json({ error: "Store not connected — connect eBay account first" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Tienda no conectada. Ve a Mis Tiendas → Conectar tu cuenta eBay primero." },
+        { status: 400 }
+      );
     }
 
-    let totalChecked = 0;
-    let totalAdded   = 0;
-    let totalSkipped = 0;
-    const seenIds    = new Set<string>();
+    // ── Pre-load existing queue to avoid per-item Firestore queries ─────────
+    // Batch fetch all existing itemIds + normalized titles — much faster than
+    // N individual .where() calls inside the loop.
+    const existingSnap = await queueCol(userId)
+      .select("ebayItemId", "normalizedTitle")
+      .limit(5000)
+      .get();
+    const existingIds    = new Set<string>(existingSnap.docs.map(d => String(d.data().ebayItemId ?? "")));
+    const existingTitles = new Set<string>(existingSnap.docs.map(d => String(d.data().normalizedTitle ?? "")));
+
+    console.log(`[import-store] Filters: $${minPrice}-$${maxPrice} | minSold=${minSold} | ${existingIds.size} existing items`);
+
+    // ── Paginate GetSellerList — no per-item API calls ───────────────────────
     let page    = 1;
     let hasMore = true;
+    let checked = 0;
+    let added   = 0;
+    let skipped = 0;
+    const seenThisRun = new Set<string>();
 
-    while (hasMore && page <= MAX_PAGES && totalChecked < MAX_ITEMS_PER_STORE) {
+    while (hasMore && page <= CONFIG.MAX_PAGES && checked < CONFIG.MAX_ITEMS) {
       const { items, hasMore: more, total } = await fetchSellerPage(seller, page, userToken);
       hasMore = more;
-      if (items.length === 0) break;
-      console.log(`[import-store] page ${page}/${Math.ceil(total / 200)} — ${items.length} listings (total: ${total})`);
+
+      if (items.length === 0 && page === 1) {
+        return NextResponse.json({
+          success: false,
+          seller,
+          checked: 0, added: 0, skipped: 0,
+          message: `No se encontraron listings activos para "${seller}". Verifica el username.`,
+        });
+      }
+
+      console.log(`[import-store] Page ${page}/${Math.ceil(total / 200)} — ${items.length} items (store total: ${total})`);
+
+      // Batch write — Firestore allows 500 ops per batch
+      const batch = db.batch();
+      let batchOps = 0;
 
       for (const item of items) {
-        if (totalChecked >= MAX_ITEMS_PER_STORE) break;
-        if (seenIds.has(item.itemId)) continue;
-        seenIds.add(item.itemId);
-        totalChecked++;
+        if (checked >= CONFIG.MAX_ITEMS) break;
+        if (seenThisRun.has(item.itemId)) continue;
+        seenThisRun.add(item.itemId);
+        checked++;
 
-        const title = item.title ?? "";
+        // ── Local filters — zero API calls ───────────────────────────────
+        if (item.price < minPrice || item.price > maxPrice)          { skipped++; continue; }
+        if (item.condition && !item.condition.toLowerCase().includes("new")) { skipped++; continue; }
+        if (isBanned(item.title, extraBlocked))                      { skipped++; continue; }
+        if (item.sold < minSold)                                      { skipped++; continue; }
+        if (existingIds.has(item.itemId))                             { skipped++; continue; }
 
-        // Filter by price only (keep it simple — user chose this store manually)
-        if (item.price < minPrice || item.price > maxPrice) { totalSkipped++; continue; }
+        const normTitle = item.title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
+        if (existingTitles.has(normTitle))                            { skipped++; continue; }
 
-        // Duplicate check
-        const dup = await queueCol(userId).where("ebayItemId", "==", item.itemId).limit(1).get();
-        if (!dup.empty) { totalSkipped++; continue; }
+        // ── Build product ─────────────────────────────────────────────────
+        const totalMarketCost       = parseFloat((item.price + item.shippingCost).toFixed(2));
+        const suggestedSellingPrice = parseFloat((totalMarketCost * (1 + markupPct / 100)).toFixed(2));
 
-        // Sales validation — filter by min sales only
-        const td = await getTradingData(item.itemId, storeId);
-        if (td.soldCount < minSold)          { totalSkipped++; continue; }
-        if (td.estimatedSold30d < minSold30) { totalSkipped++; continue; }
-
-        const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
-        const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
-        if (!titleDup.empty) { totalSkipped++; continue; }
-
-        const totalMarketCost       = item.price + item.shippingCost;
-        const markupPercent         = settings.markupPercent ?? CONFIG.MARKUP_PERCENT;
-        const suggestedSellingPrice = parseFloat((totalMarketCost * (1 + markupPercent / 100)).toFixed(2));
+        const listingAgeDays = item.startTime
+          ? Math.max(1, (Date.now() - new Date(item.startTime).getTime()) / 86400000)
+          : 180;
+        const soldPerDay      = item.sold / listingAgeDays;
+        const decay           = listingAgeDays > 730 ? 0.35 : listingAgeDays > 365 ? 0.50 : listingAgeDays > 180 ? 0.65 : listingAgeDays > 90 ? 0.80 : 1.0;
+        const estimatedSold30d = Math.round(soldPerDay * 30 * decay);
 
         const product: Omit<QueueProduct, "id"> = {
-          ebayItemId: item.itemId, title, normalizedTitle,
-          images: item.pic ? [item.pic] : [], userId, storeId,
-          ebayReferencePrice: item.price, ebayShippingCost: item.shippingCost,
-          totalMarketCost, refPriceMin: item.price, refPriceMax: item.price,
-          eproloPrice: null, eproloUrl: null,
-          suggestedSellingPrice, markupPercent: CONFIG.MARKUP_PERCENT, stock: CONFIG.STOCK, condition: "New",
-          categoryId: item.categoryId, categoryName: "",
-          soldCount: td.soldCount, estimatedSold30d: td.estimatedSold30d,
-          listingAgeDays: td.listingAgeDays,
-          sourceUrl: `https://www.ebay.com/itm/${item.itemId}`,
-          description: "", margin: null, marginPercent: null,
-          status: "approved", createdAt: Date.now(), updatedAt: Date.now(),
+          ebayItemId:           item.itemId,
+          title:                item.title,
+          normalizedTitle:      normTitle,
+          images:               item.pic ? [item.pic] : [],
+          userId,
+          storeId,
+          ebayReferencePrice:   item.price,
+          ebayShippingCost:     item.shippingCost,
+          totalMarketCost,
+          refPriceMin:          item.price,
+          refPriceMax:          item.price,
+          eproloPrice:          null,
+          eproloUrl:            null,
+          suggestedSellingPrice,
+          markupPercent:        Math.round(markupPct),
+          margin:               null,
+          marginPercent:        null,
+          categoryId:           item.categoryId,
+          categoryName:         "",
+          soldCount:            item.sold,
+          estimatedSold30d,
+          listingAgeDays:       Math.round(listingAgeDays),
+          condition:            item.condition || "New",
+          sourceUrl:            `https://www.ebay.com/itm/${item.itemId}`,
+          description:          "",
+          stock:                CONFIG.STOCK,
+          status:               importStatus,
+          createdAt:            Date.now(),
+          updatedAt:            Date.now(),
         };
 
-        await queueCol(userId).add(product);
-        totalAdded++;
-        console.log(`[import-store] ✅ ADDED "${title.slice(0, 45)}" $${suggestedSellingPrice} | ${td.soldCount} sold`);
-        await new Promise(r => setTimeout(r, 60));
+        const ref = queueCol(userId).doc();
+        batch.set(ref, product);
+        batchOps++;
+
+        // Track for dedup within this import run
+        existingIds.add(item.itemId);
+        existingTitles.add(normTitle);
+        added++;
+      }
+
+      if (batchOps > 0) {
+        await batch.commit();
+        console.log(`[import-store] ✅ Batch +${batchOps} (total: ${added})`);
       }
 
       page++;
-      if (hasMore) await new Promise(r => setTimeout(r, 400));
+      if (hasMore) await new Promise(r => setTimeout(r, 250));
     }
 
-    console.log(`[import-store] ✅ Done — ${totalAdded} added | ${totalSkipped} skipped | ${totalChecked} checked`);
-    return NextResponse.json({ success: true, seller, checked: totalChecked, added: totalAdded, skipped: totalSkipped });
+    const message = added === 0
+      ? `No se encontraron productos de "${seller}" en el rango $${minPrice}-$${maxPrice} con al menos ${minSold} venta.`
+      : `${added} productos importados de "${seller}" → estado "${importStatus}". ${skipped} descartados.`;
+
+    console.log(`[import-store] ✅ Finalizado — added=${added} skipped=${skipped} checked=${checked}`);
+    return NextResponse.json({ success: true, seller, checked, added, skipped, message });
 
   } catch (e) {
-    console.error("[import-store] Error:", e);
+    console.error("[import-store] ❌", e);
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 }
