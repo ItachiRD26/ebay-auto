@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserToken } from "@/lib/ebay";
-import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS } from "@/lib/firebase";
+import { getAppToken } from "@/lib/ebay";
+import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS, storesCol } from "@/lib/firebase";
 import { QueueProduct, Settings } from "@/types";
 
 // ─── Config — 5× more relaxed than search ────────────────────────────────────
@@ -51,8 +51,13 @@ export function extractSeller(input: string): string | null {
   return null;
 }
 
-// ─── Fetch one page of seller listings via GetSellerList ─────────────────────
-// GetSellerList already includes QuantitySold per item — zero extra API calls needed.
+// ─── Fetch seller listings via Browse API (app token) ────────────────────────
+// KEY: Browse API with sellers:{username} filter works for ANY public seller.
+// GetSellerList (Trading API) only works for the authenticated user's OWN listings —
+// that's why it was importing your own store instead of the target seller.
+//
+// Tradeoff: Browse API doesn't return QuantitySold directly, but unitSoldCount
+// is available on some items. We use it when present, else default to 0.
 interface SellerItem {
   itemId:        string;
   title:         string;
@@ -67,84 +72,84 @@ interface SellerItem {
 
 async function fetchSellerPage(
   seller: string,
-  page: number,
-  userToken: string,
+  page: number,           // 0-based offset page (offset = page * 200)
+  appToken: string,
 ): Promise<{ items: SellerItem[]; hasMore: boolean; total: number }> {
-  const now    = new Date().toISOString();
-  const future = new Date(Date.now() + 120 * 86400000).toISOString();
+  const offset = page * 200;
 
-  const xml = `<?xml version="1.0" encoding="utf-8"?>
-<GetSellerListRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
-  <UserID>${seller}</UserID>
-  <ActiveList>true</ActiveList>
-  <ListingType>FixedPriceItem</ListingType>
-  <GranularityLevel>Fine</GranularityLevel>
-  <Pagination>
-    <EntriesPerPage>200</EntriesPerPage>
-    <PageNumber>${page}</PageNumber>
-  </Pagination>
-  <EndTimeFrom>${now}</EndTimeFrom>
-  <EndTimeTo>${future}</EndTimeTo>
-  <IncludeVariations>false</IncludeVariations>
-</GetSellerListRequest>`;
+  const params = new URLSearchParams({
+    limit:       "200",
+    offset:      String(offset),
+    sort:        "BEST_MATCH",
+    filter:      `sellers:{${seller}},conditions:{NEW},buyingOptions:{FIXED_PRICE}`,
+    fieldgroups: "EXTENDED",
+  });
 
   try {
-    const res = await fetch("https://api.ebay.com/ws/api.dll", {
-      method: "POST",
-      headers: {
-        "X-EBAY-API-SITEID": "0",
-        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
-        "X-EBAY-API-CALL-NAME": "GetSellerList",
-        "Content-Type": "text/xml",
-      },
-      body: xml,
-      signal: AbortSignal.timeout(30000),
-    });
+    const res = await fetch(
+      `https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`,
+      {
+        headers: {
+          Authorization:             `Bearer ${appToken}`,
+          "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        },
+        signal: AbortSignal.timeout(20000),
+      }
+    );
 
-    const text = await res.text();
-
-    if (!res.ok || text.includes("<Ack>Failure</Ack>")) {
-      const errMsg = text.match(/<LongMessage>(.*?)<\/LongMessage>/)?.[1] ?? "unknown";
-      console.warn(`[import-store] GetSellerList p${page} failed: ${errMsg.slice(0, 100)}`);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.warn(`[import-store] Browse API offset=${offset} failed ${res.status}: ${txt.slice(0, 100)}`);
       return { items: [], hasMore: false, total: 0 };
     }
 
-    const totalPages   = parseInt(text.match(/<TotalNumberOfPages>(\d+)<\/TotalNumberOfPages>/)?.[1] ?? "1", 10);
-    const totalEntries = parseInt(text.match(/<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/)?.[1] ?? "0", 10);
+    const data = await res.json() as {
+      itemSummaries?: Array<{
+        itemId?:        string;
+        title?:         string;
+        price?:         { value?: string };
+        shippingOptions?: Array<{ shippingCost?: { value?: string }; shippingCostType?: string }>;
+        unitSoldCount?: number;
+        itemCreationDate?: string;
+        categories?:    Array<{ categoryId?: string }>;
+        image?:         { imageUrl?: string };
+        thumbnailImages?: Array<{ imageUrl?: string }>;
+        condition?:     string;
+        conditionId?:   string;
+      }>;
+      total?: number;
+    };
 
-    const itemBlocks = text.match(/<Item>[\s\S]*?<\/Item>/g) ?? [];
+    const total = data.total ?? 0;
+    const summaries = data.itemSummaries ?? [];
 
-    const items: SellerItem[] = itemBlocks.flatMap(block => {
-      const get = (tag: string) =>
-        block.match(new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`))?.[1]?.trim() ?? "";
-
-      const itemId = get("ItemID");
-      const title  = get("Title");
+    const items: SellerItem[] = summaries.flatMap(item => {
+      const itemId = item.itemId?.split("|")[1] ?? item.itemId ?? "";
+      const title  = item.title ?? "";
       if (!itemId || !title) return [];
 
-      const priceRaw =
-        block.match(/<ConvertedCurrentPrice[^>]*>([\d.]+)<\/ConvertedCurrentPrice>/)?.[1] ||
-        block.match(/<CurrentPrice[^>]*>([\d.]+)<\/CurrentPrice>/)?.[1] ||
-        block.match(/<BuyItNowPrice[^>]*>([\d.]+)<\/BuyItNowPrice>/)?.[1] ||
-        block.match(/<StartPrice[^>]*>([\d.]+)<\/StartPrice>/)?.[1] ||
-        "0";
-      const price = parseFloat(priceRaw) || 0;
+      const price = parseFloat(item.price?.value ?? "0") || 0;
 
-      const sold = parseInt(get("QuantitySold") || "0", 10);
-
+      const shipping = item.shippingOptions?.[0];
       const shippingCost =
-        parseFloat(block.match(/<ShippingServiceCost[^>]*>([\d.]+)<\/ShippingServiceCost>/)?.[1] ?? "0") || 0;
+        shipping?.shippingCostType === "FREE" ? 0 :
+        parseFloat(shipping?.shippingCost?.value ?? "0") || 0;
 
-      const startTime  = get("StartTime");
-      const categoryId = get("CategoryID");
-      const pic        = block.match(/<PictureURL>(https?:\/\/[^<]+)<\/PictureURL>/)?.[1]?.trim() ?? "";
-      const condition  = get("ConditionDisplayName") || (get("ConditionID") === "1000" ? "New" : "Used");
+      const sold = item.unitSoldCount ?? 0;
 
-      return [{ itemId, title, price, shippingCost, sold, startTime, categoryId, pic, condition }];
+      const categoryId = item.categories?.[0]?.categoryId ?? "";
+      const pic =
+        item.image?.imageUrl ??
+        item.thumbnailImages?.[0]?.imageUrl ?? "";
+
+      const conditionName = item.condition ?? "";
+      const condition = conditionName || (item.conditionId === "1000" ? "New" : "New");
+
+      return [{ itemId, title, price, shippingCost, sold, startTime: item.itemCreationDate ?? "", categoryId, pic, condition }];
     });
 
-    return { items, hasMore: page < totalPages, total: totalEntries };
+    console.log(`[import-store] Browse offset=${offset} → ${items.length} items (total: ${total})`);
+    return { items, hasMore: offset + 200 < total, total };
   } catch (e) {
     console.warn(`[import-store] fetchSellerPage error:`, e);
     return { items: [], hasMore: false, total: 0 };
@@ -178,6 +183,27 @@ export async function POST(req: NextRequest) {
 
     console.log(`\n[import-store] 🏪 "${seller}" — importando, status="${importStatus}"`);
 
+    // ── Self-import guard ───────────────────────────────────────────────────
+    // Prevent importing from the user's own connected eBay stores.
+    // This happens when the user accidentally pastes their own store URL.
+    try {
+      const userStoresSnap = await storesCol(userId).get();
+      for (const storeDoc of userStoresSnap.docs) {
+        const storeData = storeDoc.data() as { ebayUsername?: string; name?: string };
+        const connectedUsername = (storeData.ebayUsername ?? "").toLowerCase().trim();
+        if (connectedUsername && connectedUsername === seller.toLowerCase().trim()) {
+          console.warn(`[import-store] 🚫 Self-import blocked: "${seller}" is the user's own connected store`);
+          return NextResponse.json({
+            error: `"${seller}" es tu propia tienda de eBay. Pega el link de una tienda CN diferente.`,
+            selfImport: true,
+          }, { status: 400 });
+        }
+      }
+    } catch (e) {
+      console.warn("[import-store] Could not verify self-import:", e);
+      // Don't block — just warn and continue
+    }
+
     // ── Load settings ───────────────────────────────────────────────────────
     const [settingsSnap, kwSnap] = await Promise.all([
       getSettingsDoc(userId, "main").get(),
@@ -193,16 +219,10 @@ export async function POST(req: NextRequest) {
     const userBlocked = (kwSnap.data() as { excludedKeywords?: string[] } | undefined)?.excludedKeywords ?? [];
     const extraBlocked = userBlocked.map(k => k.toLowerCase().trim()).filter(Boolean);
 
-    // ── Connect user account ────────────────────────────────────────────────
-    let userToken: string;
-    try {
-      userToken = await getUserToken(storeId);
-    } catch {
-      return NextResponse.json(
-        { error: "Tienda no conectada. Ve a Mis Tiendas → Conectar tu cuenta eBay primero." },
-        { status: 400 }
-      );
-    }
+    // ── App token — Browse API works for ANY public seller, no user auth needed ──
+    // Unlike GetSellerList (Trading API) which only returns YOUR OWN listings,
+    // Browse API with sellers:{username} can fetch any public seller's listings.
+    const appToken = await getAppToken();
 
     // ── Pre-load existing queue to avoid per-item Firestore queries ─────────
     // Batch fetch all existing itemIds + normalized titles — much faster than
@@ -217,7 +237,7 @@ export async function POST(req: NextRequest) {
     console.log(`[import-store] Filters: $${minPrice}-$${maxPrice} | minSold=${minSold} | ${existingIds.size} existing items`);
 
     // ── Paginate GetSellerList — no per-item API calls ───────────────────────
-    let page    = 1;
+    let page    = 0;  // Browse API uses 0-based offset pages
     let hasMore = true;
     let checked = 0;
     let added   = 0;
@@ -225,7 +245,7 @@ export async function POST(req: NextRequest) {
     const seenThisRun = new Set<string>();
 
     while (hasMore && page <= CONFIG.MAX_PAGES && checked < CONFIG.MAX_ITEMS) {
-      const { items, hasMore: more, total } = await fetchSellerPage(seller, page, userToken);
+      const { items, hasMore: more, total } = await fetchSellerPage(seller, page, appToken);
       hasMore = more;
 
       if (items.length === 0 && page === 1) {
@@ -318,7 +338,7 @@ export async function POST(req: NextRequest) {
       }
 
       page++;
-      if (hasMore) await new Promise(r => setTimeout(r, 250));
+      if (hasMore && page <= CONFIG.MAX_PAGES) await new Promise(r => setTimeout(r, 250));
     }
 
     const message = added === 0
