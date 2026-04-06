@@ -77,11 +77,15 @@ async function fetchSellerPage(
 ): Promise<{ items: SellerItem[]; hasMore: boolean; total: number }> {
   const offset = page * 200;
 
+  // Browse API requires q OR category_ids — without it returns 0 results silently.
+  // "a" matches virtually every listing title (most titles contain the letter a).
+  // We rely on the sellers:{} filter to scope the results to the target seller.
   const params = new URLSearchParams({
+    q:           "a",
     limit:       "200",
     offset:      String(offset),
     sort:        "BEST_MATCH",
-    filter:      `sellers:{${seller}},conditions:{NEW},buyingOptions:{FIXED_PRICE}`,
+    filter:      `sellers:{${seller}},buyingOptions:{FIXED_PRICE}`,
     fieldgroups: "EXTENDED",
   });
 
