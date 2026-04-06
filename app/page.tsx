@@ -93,6 +93,8 @@ export default function Dashboard() {
   const [cleaning, setCleaning]         = useState(false);
   const [publishingAll, setPublishingAll] = useState(false);
   const [publishProgress, setPublishProgress] = useState({ done: 0, total: 0, errors: 0 });
+  const [rejectingAll, setRejectingAll] = useState(false);
+  const [showRejectAllConfirm, setShowRejectAllConfirm] = useState(false);
   const [cleanResult, setCleanResult]   = useState<{ delisted: number; checked: number } | null>(null);
 
   // ── Toasts ───────────────────────────────────────────────────────────────────
@@ -325,6 +327,27 @@ export default function Dashboard() {
     }
     setPublishingAll(false);
     toast(`✅ ${ids.length} publicados`, "ok");
+  };
+
+  const handleRejectAll = async () => {
+    const targetStatus = activeTab as string;
+    const ids = allProducts
+      .filter(p => p.status === targetStatus)
+      .map(p => p.id);
+    if (!ids.length) { setShowRejectAllConfirm(false); return; }
+    setShowRejectAllConfirm(false);
+    setRejectingAll(true);
+    let done = 0;
+    for (const id of ids) {
+      await fetch("/api/ebay/queue", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: id, updates: { status: "rejected" }, userId: uid }),
+      });
+      done++;
+    }
+    setRejectingAll(false);
+    toast(`🗑 ${done} productos rechazados`, "ok");
   };
 
   // ── Search ────────────────────────────────────────────────────────────────────
@@ -855,6 +878,15 @@ export default function Dashboard() {
                 {QUEUE_TABS.find(t => t.key === activeTab)?.label} — {stats[activeTab]} products
               </div>
               <div style={{ display: "flex", gap: "0.5rem" }}>
+                {(activeTab === "pending" || activeTab === "approved" || activeTab === "failed") && stats[activeTab] > 0 && (
+                  <button
+                    onClick={() => setShowRejectAllConfirm(true)}
+                    disabled={rejectingAll}
+                    style={{ padding: "0.4rem 0.9rem", background: "transparent", color: "var(--red)", border: "1px solid var(--red)", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", opacity: rejectingAll ? 0.6 : 1 }}
+                  >
+                    {rejectingAll ? "Rechazando..." : `🗑 Reject all (${stats[activeTab]})`}
+                  </button>
+                )}
                 {activeTab === "approved" && stats.approved > 0 && (
                   <>
                     {publishingAll && (
@@ -1072,6 +1104,52 @@ export default function Dashboard() {
           onClose={() => setPublishTarget(null)}
           onConfirm={handlePublishConfirm}
         />
+      )}
+
+
+      {/* ── Reject All confirm modal ── */}
+      {showRejectAllConfirm && (
+        <div
+          onClick={() => setShowRejectAllConfirm(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 14, width: "100%", maxWidth: 380, overflow: "hidden" }}
+          >
+            {/* Header */}
+            <div style={{ padding: "1.25rem 1.25rem 1rem", borderBottom: "1px solid var(--border)" }}>
+              <div style={{ fontSize: "1.5rem", marginBottom: "0.4rem" }}>🗑</div>
+              <div style={{ fontWeight: 700, fontSize: "1rem", color: "var(--text1)" }}>
+                Reject all {activeTab}?
+              </div>
+            </div>
+            {/* Body */}
+            <div style={{ padding: "1rem 1.25rem", fontSize: "0.85rem", color: "var(--text2)", lineHeight: 1.6 }}>
+              <p style={{ margin: 0 }}>
+                Se moverán <strong style={{ color: "var(--text1)" }}>{stats[activeTab as keyof typeof stats]} productos</strong> al estado <strong style={{ color: "var(--text1)" }}>Rejected</strong>.
+              </p>
+              <p style={{ margin: "0.5rem 0 0", fontSize: "0.78rem", color: "var(--text3)" }}>
+                Los productos rechazados no aparecerán en futuras búsquedas. Esta acción no se puede deshacer.
+              </p>
+            </div>
+            {/* Actions */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", padding: "0 1.25rem 1.25rem" }}>
+              <button
+                onClick={() => setShowRejectAllConfirm(false)}
+                style={{ padding: "0.6rem", background: "transparent", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text2)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleRejectAll}
+                style={{ padding: "0.6rem", background: "var(--red)", border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer" }}
+              >
+                🗑 Reject all
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Settings modals ── */}
