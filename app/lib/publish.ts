@@ -1,5 +1,13 @@
 import { db, COLLECTIONS, queueCol, settingsDoc, seenCol } from "@/lib/firebase";
-import { getReferenceItemData, getCategoryIdForTitle, getTradingCategoryForTitle } from "@/lib/ebay";
+import { getReferenceItemData } from "@/lib/ebay";
+import {
+  getVerifiedLeafCategory,
+  fetchRequiredAspects,
+  buildSmartAspects,
+  detectTypeFromTitle,
+  CATEGORY_TYPES,
+} from "@/lib/category-aspects";
+import { getAppToken } from "@/lib/ebay";
 
 interface VariationSpec { specifics: Record<string, string>; refPrice: number; }
 interface VariationsData { variations: VariationSpec[]; specificsSet: Record<string, string[]>; picturesByVariant: Record<string, string[]>; pictureDimension: string; }
@@ -28,12 +36,14 @@ export async function generateTitleAndDescription(title: string, aspects: Record
       return { title: parsed.title, description: parsed.description };
     }
   } catch (e) { console.warn("[publish] Claude failed, using original title:", e); }
-  return { title, description: title };
+  // FIX: return empty description so the caller can generate a proper fallback
+  // Old code: return { title, description: title } — set description = title (wrong!)
+  return { title, description: "" };
 }
 
 async function findAlternativeReference(title: string, originalItemId: string, userToken: string): Promise<{ itemId: string; categoryId: string; aspects: Record<string, string[]>; images: string[] } | null> {
   try {
-    const appToken = await (await import("@/lib/ebay")).getAppToken();
+    const appToken = await getAppToken();
     const params = new URLSearchParams({ q: title.split(" ").slice(0, 5).join(" "), limit: "10", filter: "buyingOptions:{FIXED_PRICE},itemLocationCountry:CN,conditions:{NEW}", fieldgroups: "EXTENDED" });
     const res = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`, { headers: { Authorization: `Bearer ${appToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
@@ -43,7 +53,6 @@ async function findAlternativeReference(title: string, originalItemId: string, u
       const numericId = rawId.split("|")[1] ?? rawId;
       if (numericId === originalItemId) continue;
       if (numericId.startsWith(originalItemId.slice(0, 6))) continue;
-      const { getReferenceItemData } = await import("@/lib/ebay");
       const refData = await getReferenceItemData(numericId, userToken);
       if (!refData) continue;
       console.log(`[publish] 🔍 Alt ref: ${numericId} — ${Object.keys(refData.aspects).length} aspects`);
@@ -143,46 +152,14 @@ Return ONLY valid JSON: {"aspects": {"field": ["truncated value"]}}`;
   } catch { return null; }
 }
 
-// Known verified leaf category IDs — tested against Trading API
-function getLeafCategoryByTitle(title: string): string {
-  const t = title.toLowerCase();
-  // Pet — be specific before generic
-  if ((t.includes("dog") || t.includes("pet") || t.includes("puppy")) && (t.includes("collar") || t.includes("leash") || t.includes("harness") || t.includes("chain"))) return "66862";  // Dog Collars & Tags
-  if ((t.includes("cat") || t.includes("kitten")) && (t.includes("collar") || t.includes("harness"))) return "20748"; // Cat Collars & Tags
-  if (t.includes("collar") || t.includes("leash") || t.includes("harness")) return "66862"; // Dog Collars & Tags (generic)
-  if (t.includes("pet") || t.includes("dog") || t.includes("puppy")) return "20742"; // Dog Supplies (leaf)
-  if (t.includes("cat") || t.includes("kitten")) return "20750"; // Cat Supplies (leaf)
-  if (t.includes("adapter") || t.includes("converter") || t.includes("plug"))  return "139762"; // Outlet Adapters
-  if (t.includes("phone stand") || t.includes("phone holder") || t.includes("phone mount")) return "116458"; // Phone Mounts
-  if (t.includes("car") || t.includes("auto") || t.includes("vehicle"))        return "179690"; // Car Care
-  if (t.includes("yoga") || t.includes("fitness") || t.includes("exercise"))   return "158902"; // Fitness
-  if (t.includes("light") || t.includes("lamp") || t.includes("led"))          return "20697";  // Lamps
-  if (t.includes("brush") || t.includes("clean") || t.includes("scrub"))       return "37592";  // Cleaning
-  if (t.includes("travel") || t.includes("packing") || t.includes("luggage"))  return "169291"; // Travel
-  if (t.includes("mug") || t.includes("cup"))                                   return "20686";  // Mugs
-  if (t.includes("bottle") || t.includes("tumbler"))                            return "20579";  // Bottles
-  if (t.includes("pillow"))                                                      return "20455";  // Pillows
-  if (t.includes("blanket") || t.includes("throw"))                             return "20460";  // Blankets
-  if (t.includes("towel"))                                                       return "20461";  // Towels
-  if (t.includes("rug") || t.includes("mat"))                                   return "20580";  // Rugs/Mats
-  if (t.includes("vase") || t.includes("planter"))                              return "116656"; // Vases
-  if (t.includes("clock"))                                                       return "3815";   // Clocks
-  if (t.includes("frame"))                                                       return "92074";  // Frames
-  // ── Footwear — verified Trading API leaf category IDs ─────────────────────
-  if (t.includes("loafer") || t.includes("mule") || t.includes("slip-on") || t.includes("slip on")) return "45333"; // Men's Loafers & Slip-Ons (leaf)
-  if (t.includes("slipper"))                                                                          return "63867"; // Men's Slippers (leaf)
-  if (t.includes("sneaker") || t.includes("trainer"))                                                return "15709"; // Men's Sneakers (leaf)
-  if (t.includes("running") && (t.includes("shoe") || t.includes("footwear")))                      return "15709"; // Men's Sneakers (leaf)
-  if (t.includes("boot") && (t.includes("women") || t.includes("ladies") || t.includes("girl")))    return "55793"; // Women's Boots (leaf)
-  if (t.includes("boot") && (t.includes("men") || t.includes("male") || t.includes("boy")))         return "11498"; // Men's Boots (leaf)
-  if (t.includes("heel") || t.includes("pump") || t.includes("stiletto") || t.includes("wedge"))    return "55791"; // Women's Heels (leaf)
-  if (t.includes("sandal") || t.includes("flip flop") || t.includes("slides") || t.includes("thong"))return "11504"; // Women's Sandals (leaf)
-  if (t.includes("oxford") || t.includes("derby") || t.includes("dress shoe") || t.includes("formal shoe")) return "57929"; // Men's Dress Shoes (leaf)
-  if ((t.includes("shoe") || t.includes("footwear")) && (t.includes("women") || t.includes("ladies"))) return "55789"; // Women's Flats (leaf)
-  if (t.includes("shoe") && !t.includes("organizer") && !t.includes("rack") && !t.includes("storage")) return "45333"; // Men's Loafers (default shoe fallback, leaf)
-  if (t.includes("shoe organizer") || t.includes("shoe rack") || t.includes("shoe storage")) return "112576"; // Shoe Organizers
-  return "20625"; // Kitchen Storage — default verified leaf
-}
+// ─── REMOVED: getLeafCategoryByTitle (inline) ─────────────────────────────────
+// Replaced by matchCategoryByTitle() + getVerifiedLeafCategory() in category-aspects.ts
+// which:
+//   1. Keyword-matches the title
+//   2. Validates the match is actually a leaf via eBay Taxonomy API
+//   3. Falls back to Taxonomy API suggestion for the full title
+//   4. Falls back to original CN category if that's a leaf
+//   5. Last resort: "20625" (Kitchen Storage, always a leaf)
 
 function escXml(s: string): string {
   // Full XML escape for attributes and URLs
@@ -196,72 +173,28 @@ function escVal(s: string): string {
 }
 
 async function addFixedPriceItem(product: {
-  title: string; description: string; categoryId: string; price: number;
+  title: string; description: string; categoryId: string; categoryType?: import("@/lib/category-aspects").CategoryType; price: number;
   stock: number; images: string[]; condition: string; aspects: Record<string, string[]>;
   variations?: VariationsData | null; markupRatio?: number;
   fulfillmentPolicyId?: string; paymentPolicyId?: string; returnPolicyId?: string;
   itemCountry?: string; itemLocation?: string;
 }, userToken: string): Promise<{ itemId: string }> {
-  const isChinese = (v: string) => /[\u4e00-\u9fff]/.test(v);
-  const aspects = { ...product.aspects };
-  for (const key of Object.keys(aspects)) { aspects[key] = aspects[key].filter((v: string) => !isChinese(v)); if (aspects[key].length === 0) delete aspects[key]; }
-  aspects["Brand"] = aspects["Brand"]?.length ? aspects["Brand"] : ["Unbranded"];
-  aspects["MPN"]   = ["Does Not Apply"];
-  for (const key of Object.keys(aspects)) {
-    aspects[key] = aspects[key].map((v: string) => v.slice(0, 65).trim()).filter((v: string) => v.length > 0).slice(0, 5);
-    if (aspects[key].length === 0) delete aspects[key];
-  }
-  const t = product.title.toLowerCase();
-  const isClothing = ["dress","shirt","pants","jacket","coat","skirt","leggings","hoodie","sweater","blouse","shorts","jeans","suit"].some(w => t.includes(w));
-  if (isClothing) {
-    if (!aspects["Department"]) aspects["Department"] = ["Women"];
-    if (!aspects["Sleeve Length"]) aspects["Sleeve Length"] = t.includes("sleeveless") ? ["Sleeveless"] : t.includes("short sleeve") ? ["Short Sleeve"] : ["Long Sleeve"];
-    if (!aspects["Neckline"]) aspects["Neckline"] = ["Round Neck"];
-    if (!aspects["Occasion"]) aspects["Occasion"] = ["Casual"];
-    if (!aspects["Style"]) aspects["Style"] = ["Casual"];
-    if (!aspects["Pattern"]) aspects["Pattern"] = t.includes("floral") ? ["Floral"] : t.includes("stripe") ? ["Striped"] : ["Solid"];
-  }
-  if (!aspects["Type"]) {
-    if (t.includes("led strip") || t.includes("strip light")) aspects["Type"] = ["LED Strip Light"];
-    else if (t.includes("lamp") || t.includes("light") || t.includes("led")) aspects["Type"] = ["LED"];
-    else if (t.includes("mug")) aspects["Type"] = ["Mug"];
-    else if (t.includes("bottle")) aspects["Type"] = ["Water Bottle"];
-    else if (t.includes("pillow")) aspects["Type"] = ["Throw Pillow"];
-    else if (t.includes("blanket") || t.includes("throw")) aspects["Type"] = ["Throw Blanket"];
-    else if (t.includes("frame")) aspects["Type"] = ["Picture Frame"];
-    else if (t.includes("rack") || t.includes("organizer") || t.includes("holder")) aspects["Type"] = ["Organizer"];
-    else if (t.includes("box")) aspects["Type"] = ["Storage Box"];
-    else if (t.includes("brush")) aspects["Type"] = ["Cleaning Brush"];
-    else if (t.includes("mat") || t.includes("rug")) aspects["Type"] = ["Mat"];
-    else aspects["Type"] = ["Other"];
-  }
-  const hasVariationData = !!(product.variations?.variations?.length);
-  if (!aspects["Color"] && !hasVariationData) {
-    if (t.includes("black")) aspects["Color"] = ["Black"];
-    else if (t.includes("white")) aspects["Color"] = ["White"];
-    else if (t.includes("silver") || t.includes("stainless")) aspects["Color"] = ["Silver"];
-    else if (t.includes("gold")) aspects["Color"] = ["Gold"];
-    else if (t.includes("brown") || t.includes("bamboo") || t.includes("wood")) aspects["Color"] = ["Brown"];
-    else if (t.includes("clear") || t.includes("transparent")) aspects["Color"] = ["Clear"];
-    else aspects["Color"] = ["Multicolor"];
-  }
-  if (!aspects["Material"]) {
-    if (t.includes("stainless") || t.includes("steel") || t.includes("metal") || t.includes("aluminum")) aspects["Material"] = ["Metal"];
-    else if (t.includes("ceramic")) aspects["Material"] = ["Ceramic"];
-    else if (t.includes("plastic") || t.includes("acrylic") || t.includes("pvc")) aspects["Material"] = ["Plastic"];
-    else if (t.includes("bamboo")) aspects["Material"] = ["Bamboo"];
-    else if (t.includes("wood")) aspects["Material"] = ["Wood"];
-    else if (t.includes("glass")) aspects["Material"] = ["Glass"];
-    else if (t.includes("silicone")) aspects["Material"] = ["Silicone"];
-    else if (t.includes("foam")) aspects["Material"] = ["Memory Foam"];
-    else if (t.includes("cotton") || t.includes("fabric")) aspects["Material"] = ["Cotton"];
-    else aspects["Material"] = ["Mixed Materials"];
-  }
-  if (!aspects["Size"] && !hasVariationData) { const sm = product.title.match(/\b(\d+["x]\d+|small|medium|large|xl|xxl|one size)\b/i); aspects["Size"] = sm ? [sm[0]] : ["One Size"]; }
-  if (!aspects["Volume"] && !hasVariationData) { const vm = product.title.match(/(\d+)\s*(oz|ml)/i); if (vm) aspects["Volume"] = [`${vm[1]}${vm[2].toLowerCase()}`]; }
-  if (!aspects["Item Length"]) aspects["Item Length"] = ["10 in"];
-  if (!aspects["Item Width"])  aspects["Item Width"]  = ["10 in"];
-  if (!aspects["Item Height"]) aspects["Item Height"] = ["5 in"];
+
+  // ── Aspect building: use category-aware builder instead of scattered inline logic ──
+  // This fixes:
+  //   1. "Department/Style missing" for footwear (now always added for footwear types)
+  //   2. "Department/Style on dog collars" (pet types filter out clothing aspects)
+  //   3. Chinese values (stripped inside buildSmartAspects)
+  //   4. Aspects from wrong category (filtered by VALID_ASPECTS per type)
+  const appToken = await getAppToken();
+  const categoryType = product.categoryType ?? CATEGORY_TYPES[product.categoryId] ?? detectTypeFromTitle(product.title);
+  const requiredAspectsForCategory = await fetchRequiredAspects(product.categoryId, appToken);
+  const aspects = buildSmartAspects(
+    product.title,
+    categoryType,
+    product.aspects,
+    requiredAspectsForCategory,
+  );
 
   const picturesXml = product.images.slice(0, 12).map(url => `<PictureURL>${escXml(url)}</PictureURL>`).join("");
   const conditionId = ({"New":"1000","New with tags":"1000","New with box":"1000","New without tags":"1500","Like New":"2500","Used":"3000"} as Record<string,string>)[product.condition] ?? "1000";
@@ -407,39 +340,14 @@ async function getStorePolicies(userId: string, storeId: string): Promise<{
 }
 
 
-// ─── Validate category is a leaf — fix it if not ─────────────────────────────
-async function validateAndFixCategory(categoryId: string, title: string): Promise<string> {
-  // Step 1: Always try local keyword mapping first — these are verified Trading API leaves
-  const localLeaf = getLeafCategoryByTitle(title);
-  if (localLeaf !== "20625") {
-    // We have a specific match — trust it over any API-returned category
-    console.log(`[category] Local keyword match: ${localLeaf} for "${title.slice(0,40)}"`);
-    return localLeaf;
-  }
-
-  // Step 2: Validate the original category via Taxonomy API
-  try {
-    const appToken = await (await import("@/lib/ebay")).getAppToken();
-    const res = await fetch(
-      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${categoryId}`,
-      { headers: { Authorization: `Bearer ${appToken}` }, signal: AbortSignal.timeout(6000) }
-    );
-    if (res.ok) {
-      console.log(`[category] ${categoryId} ✅ confirmed leaf (Taxonomy API)`);
-      return categoryId;
-    }
-    // Not a leaf per Taxonomy API — try getCategoryIdForTitle as last resort
-    console.log(`[category] ${categoryId} ❌ not a leaf — fetching fresh from Taxonomy for "${title.slice(0,40)}"`);
-    const { getCategoryIdForTitle } = await import("@/lib/ebay");
-    const fresh = await getCategoryIdForTitle(title);
-    if (fresh) {
-      console.log(`[category] Taxonomy suggestion: ${fresh}`);
-      return fresh;
-    }
-  } catch (e) { console.warn("[category] validation error:", e); }
-
-  // Step 3: Generic fallback
-  return categoryId;
+// ─── Validate category and build aspects in one pass ──────────────────────────
+// Replaces the old validateAndFixCategory which trusted hardcoded IDs without
+// API validation — causing "not a leaf category" errors in production.
+async function resolveCategory(
+  originalCategoryId: string,
+  title: string,
+): Promise<{ id: string; type: import("@/lib/category-aspects").CategoryType }> {
+  return getVerifiedLeafCategory(title, originalCategoryId);
 }
 
 
@@ -509,10 +417,11 @@ export async function publishProductById(productId: string, userToken: string, u
   // When retrying after improper, always use our local category mapping
   // instead of trusting the CN seller's category (which may be restricted for new accounts)
   if (wasImproper && refCategoryId) {
-    const localCat = getLeafCategoryByTitle(product.title);
-    if (localCat !== refCategoryId) {
-      console.log(`[publish] ♻ wasImproper: overriding CN cat ${refCategoryId} → local ${localCat}`);
-      refCategoryId = localCat;
+    // Re-resolve with API validation instead of trusting hardcoded keyword map
+    const localCat = await resolveCategory(refCategoryId, product.title);
+    if (localCat.id !== refCategoryId) {
+      console.log(`[publish] ♻ wasImproper: overriding CN cat ${refCategoryId} → resolved ${localCat.id} (${localCat.type})`);
+      refCategoryId = localCat.id;
     }
   }
 
@@ -537,7 +446,8 @@ export async function publishProductById(productId: string, userToken: string, u
   } else {
     const { title: cleanTitle, description } = await generateTitleAndDescription(product.title, refAspects);
     publishTitle = cleanTitle;
-    publishDesc  = description;
+    // Fix: generateTitleAndDescription returns "" on failure — generate a proper fallback
+    publishDesc  = description || `${cleanTitle}. Durable and practical for everyday use. High quality construction. Fast shipping with tracking included.`;
   }
 
   let itemId: string;
@@ -565,14 +475,16 @@ export async function publishProductById(productId: string, userToken: string, u
     } catch { /* use existing publishDesc */ }
   }
 
-  const rawCatId    = refCategoryId || getLeafCategoryByTitle(product.title);
-  let publishCatId  = await validateAndFixCategory(rawCatId, product.title);
+  const rawCatId    = refCategoryId || "20625";
+  const { id: publishCatId, type: publishCatType } = await resolveCategory(rawCatId, product.title);
+  let currentCatId   = publishCatId;
+  let currentCatType = publishCatType;
   let publishAspects = { ...refAspects };
 
   const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters", "Style", "Department", "Occasion", "Sleeve"];
 
   try {
-    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
+    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
     itemId = result.itemId;
   } catch (firstErr: unknown) {
     const errMsg = String(firstErr instanceof Error ? firstErr.message : firstErr);
@@ -582,12 +494,14 @@ export async function publishProductById(productId: string, userToken: string, u
     console.log(`[publish] ⚠️ Error fixable detectado — pidiendo a Claude que corrija...`);
     console.log(`[publish] Error: ${errMsg}`);
 
-    const fix = await autoFixWithClaude(errMsg, { title: publishTitle, description: publishDesc, categoryId: publishCatId, aspects: publishAspects });
+    const fix = await autoFixWithClaude(errMsg, { title: publishTitle, description: publishDesc, categoryId: currentCatId, aspects: publishAspects });
 
-    // Category / leaf error → use known verified leaf
+    // Category / leaf error → re-resolve with API
     if (errMsg.includes("category") || errMsg.includes("Categor") || errMsg.includes("leaf")) {
-      publishCatId = getLeafCategoryByTitle(publishTitle);
-      console.log(`[publish] 🔧 Categoría hoja por keyword: ${publishCatId}`);
+      const resolved = await resolveCategory(currentCatId, publishTitle);
+      currentCatId   = resolved.id;
+      currentCatType = resolved.type;
+      console.log(`[publish] 🔧 Re-resolved leaf: ${currentCatId} (${currentCatType})`);
     } else {
       if (!fix) { console.log("[publish] Claude no pudo corregir"); throw firstErr; }
       if (fix.title)       { publishTitle   = fix.title;       console.log(`[publish] 🔧 Título corregido: "${fix.title}"`); }
@@ -608,7 +522,7 @@ export async function publishProductById(productId: string, userToken: string, u
 
     console.log(`[publish] 🔄 Reintentando con correcciones...`);
     try {
-      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
+      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
       itemId = result2.itemId;
       console.log(`[publish] ✅ Publicado tras corrección automática — ID: ${itemId}`);
     } catch (retryErr: unknown) {
@@ -618,19 +532,26 @@ export async function publishProductById(productId: string, userToken: string, u
         const altRef = await findAlternativeReference(publishTitle, product.ebayItemId, userToken);
         if (!altRef) throw new Error(`Vendedor bloqueado y no se encontró referencia alternativa`);
         console.log(`[publish] ✅ Referencia alternativa encontrada: ${altRef.itemId}`);
-        if (altRef.categoryId) publishCatId = altRef.categoryId;
+        if (altRef.categoryId) {
+          const altResolved = await resolveCategory(altRef.categoryId, publishTitle);
+          currentCatId   = altResolved.id;
+          currentCatType = altResolved.type;
+        }
         if (altRef.aspects && Object.keys(altRef.aspects).length > 0) publishAspects = { ...publishAspects, ...altRef.aspects };
         try {
-          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
+          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
           itemId = result3.itemId;
           console.log(`[publish] ✅ Publicado con referencia alternativa — ID: ${itemId}`);
         } catch (altErr: unknown) {
           const altMsg = String(altErr instanceof Error ? altErr.message : altErr);
           if (altMsg.includes("improper") || altMsg.includes("policy") || altMsg.includes("leaf") || altMsg.includes("category")) {
-            publishCatId = getLeafCategoryByTitle(publishTitle);
+            // Last resort: re-resolve from title alone, minimal aspects
+            const lastResort = await resolveCategory("20625", publishTitle);
+            currentCatId   = lastResort.id;
+            currentCatType = lastResort.type;
             publishAspects = { Brand: ["Unbranded"], MPN: ["Does Not Apply"] };
-            console.log(`[publish] 🔧 Último recurso: cat=${publishCatId} para "${publishTitle.slice(0,40)}"`);
-            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: publishCatId, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
+            console.log(`[publish] 🔧 Último recurso: cat=${currentCatId} para "${publishTitle.slice(0,40)}"`);
+            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
             itemId = result4.itemId;
             console.log(`[publish] ✅ Publicado con fallback máximo — ID: ${itemId}`);
           } else throw altErr;
