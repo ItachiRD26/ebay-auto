@@ -958,6 +958,10 @@ export function cleanAndSupplementAspects(
 
       if (!aspects["Style"])    aspects["Style"]    = [inferStyle(t, categoryType)];
       if (!aspects["Occasion"]) aspects["Occasion"] = [inferOccasion(t, categoryType)];
+      // Color and Upper Material: supplement from title inference if CN seller didn't provide
+      // These are required by eBay for most footwear categories.
+      if (!aspects["Color"])          aspects["Color"]          = [inferColor(t)];
+      if (!aspects["Upper Material"]) aspects["Upper Material"] = [inferUpperMaterial(t)];
       break;
     }
 

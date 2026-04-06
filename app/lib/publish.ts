@@ -209,10 +209,63 @@ async function addFixedPriceItem(product: {
 
   const picturesXml = product.images.slice(0, 12).map(url => `<PictureURL>${escXml(url)}</PictureURL>`).join("");
   const conditionId = ({"New":"1000","New with tags":"1000","New with box":"1000","New without tags":"1500","Like New":"2500","Used":"3000"} as Record<string,string>)[product.condition] ?? "1000";
-  const varData = product.variations;
   const markupRatio = product.markupRatio ?? 1.06;
   let variationsXml = "";
   let hasVariations = false;
+
+  // ── Clean + sanitize variation values before XML ────────────────────────────
+  // CN sellers often use Chinese color names (e.g. "肤色") or flagged English words
+  // (e.g. "Nude", "Skin") in their variation specifics. eBay's content filter
+  // catches these in <VariationSpecificsSet> and returns "improper words" —
+  // even when the title and description are perfectly clean.
+  const isChinese = (v: string) => /[\u4e00-\u9fff]/.test(v);
+  const FLAGGED_COLOR_MAP: Record<string, string> = {
+    "nude": "Light Beige", "skin": "Light Tan", "skin tone": "Light Tan",
+    "naked": "Beige", "flesh": "Beige", "nude pink": "Pale Pink",
+    "nude beige": "Light Beige", "sexy": "Classic", "hot": "Vibrant",
+  };
+  function cleanVariationValue(val: string): string {
+    // Strip Chinese characters
+    let clean = val.replace(/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/g, "").trim();
+    // Replace flagged words with safe alternatives
+    const lower = clean.toLowerCase();
+    for (const [flagged, safe] of Object.entries(FLAGGED_COLOR_MAP)) {
+      if (lower === flagged || lower.startsWith(flagged + " ") || lower.endsWith(" " + flagged)) {
+        clean = safe;
+        break;
+      }
+    }
+    return clean.slice(0, 65).trim();
+  }
+
+  const rawVarData = product.variations;
+  // Apply cleaning to variation specifics
+  const varData: VariationsData | null = rawVarData ? {
+    ...rawVarData,
+    variations: rawVarData.variations
+      .map((v: VariationSpec) => ({
+        ...v,
+        specifics: Object.fromEntries(
+          Object.entries(v.specifics)
+            .map(([k, val]) => [k, cleanVariationValue(val)])
+            .filter(([_, val]) => (val as string).length > 0)
+        ),
+      }))
+      .filter((v: VariationSpec) => Object.keys(v.specifics).length > 0),
+    specificsSet: Object.fromEntries(
+      Object.entries(rawVarData.specificsSet)
+        .map(([key, vals]) => [
+          key,
+          (vals as string[]).map(cleanVariationValue).filter(v => v.length > 0),
+        ])
+        .filter(([_, vals]) => (vals as string[]).length > 0)
+    ),
+    picturesByVariant: Object.fromEntries(
+      Object.entries(rawVarData.picturesByVariant)
+        .map(([key, urls]) => [cleanVariationValue(key), urls])
+        .filter(([key]) => (key as string).length > 0)
+    ),
+  } : null;
 
   if (varData && varData.variations.length > 0) {
     hasVariations = true;
@@ -611,11 +664,17 @@ Return ONLY this JSON (no markdown):
         } catch (altErr: unknown) {
           const altMsg = String(altErr instanceof Error ? altErr.message : altErr);
           if (altMsg.includes("improper") || altMsg.includes("policy") || altMsg.includes("leaf") || altMsg.includes("category")) {
-            // Last resort: re-resolve from title alone, minimal aspects, no variations, no images from blocked seller
+            // Last resort: re-resolve from title alone, minimal aspects, no variations
             const lastResort = await resolveCategory("20625", publishTitle);
             currentCatId   = lastResort.id;
             currentCatType = lastResort.type;
-            publishAspects = { Brand: ["Unbranded"], MPN: ["Does Not Apply"] };
+            // Keep basic inferred aspects so eBay doesn't reject "Color/Upper Material missing"
+            // Don't wipe everything — that causes a new set of "missing" errors.
+            publishAspects = cleanAndSupplementAspects(
+              { Brand: ["Unbranded"], MPN: ["Does Not Apply"] },
+              publishTitle,
+              currentCatType,
+            );
             // One final ultra-conservative rewrite attempt
             const lastRewrite = await callClaudeForRewrite(
               `Rewrite this eBay listing title in the most neutral, factual language possible. It was rejected 3 times for policy violation. Remove ALL ambiguous words. Return ONLY JSON: {"title":"rewritten","description":"factual 2 sentences"}\n\nProduct: "${publishTitle}"`,
