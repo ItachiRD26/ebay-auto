@@ -83,10 +83,13 @@ export default function Dashboard() {
   const [savedSellers, setSavedSellers] = useState<Array<{
     id: string; username: string; storeUrl: string; userUrl: string;
     totalListings: number; sampleTitles: string[]; category: string;
+    appearances?: number; uniqueQueries?: number; score?: number;
   }>>([]);
   const [scanningCategory, setScanningCategory] = useState<string | null>(null);
   const [importingStore,  setImportingStore]    = useState(false);
   const [importProgress,  setImportProgress]   = useState<{ checked: number; added: number; seller: string } | null>(null);
+  const [listingRange, setListingRange] = useState<{ min: number; max: number }>({ min: 200, max: 10000 });
+  const [editingRange, setEditingRange] = useState(false);
 
   // ── Actions ──────────────────────────────────────────────────────────────────
   const [promoting, setPromoting]       = useState(false);
@@ -235,7 +238,8 @@ export default function Dashboard() {
   const loadSellers = useCallback(async () => {
     const res  = await fetch("/api/ebay/discover-sellers");
     const data = await res.json();
-    if (data.sellers) setSavedSellers(data.sellers);
+    if (data.sellers)  setSavedSellers(data.sellers);
+    if (data.settings) setListingRange({ min: data.settings.minListings ?? 200, max: data.settings.maxListings ?? 10000 });
   }, []);
 
   useEffect(() => {
@@ -925,21 +929,69 @@ export default function Dashboard() {
           {/* ── Sellers view ── */}
           {showSellers && (
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+              {/* ── Top bar: scan button + range config ── */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
                 <button onClick={() => handleScanCategory(undefined)} disabled={!!scanningCategory}
                   style={{ padding: "0.38rem 0.9rem", background: "var(--purple)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer", opacity: scanningCategory ? 0.5 : 1 }}>
                   {scanningCategory ? "⏳ Scanning..." : "🔎 Scan for CN sellers"}
                 </button>
                 {scanningCategory && (
                   <span style={{ fontSize: "0.75rem", color: "var(--text3)", alignSelf: "center" }}>
-                    Sampling listings, checking sales signals and listing counts...
+                    Searching 30 categories via Browse API...
                   </span>
                 )}
+                {/* Range config toggle */}
+                <button onClick={() => setEditingRange(r => !r)}
+                  style={{ padding: "0.38rem 0.75rem", background: "transparent", color: "var(--text2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", cursor: "pointer", marginLeft: "auto" }}>
+                  ⚙ Rango: {listingRange.min.toLocaleString()}–{listingRange.max.toLocaleString()} listings
+                </button>
               </div>
 
+              {/* ── Listing range editor ── */}
+              {editingRange && (
+                <div style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "0.75rem 1rem", display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "flex-end" }}>
+                  <div>
+                    <div style={{ fontSize: "0.68rem", color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Min listings</div>
+                    <input type="number" min={1} max={listingRange.max - 1}
+                      value={listingRange.min}
+                      onChange={e => setListingRange(r => ({ ...r, min: Math.max(1, parseInt(e.target.value) || 1) }))}
+                      style={{ width: 90, background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text1)", padding: "0.3rem 0.5rem", fontSize: "0.85rem", outline: "none" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.68rem", color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Max listings</div>
+                    <input type="number" min={listingRange.min + 1}
+                      value={listingRange.max}
+                      onChange={e => setListingRange(r => ({ ...r, max: Math.max(r.min + 1, parseInt(e.target.value) || 10000) }))}
+                      style={{ width: 90, background: "var(--bg1)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text1)", padding: "0.3rem 0.5rem", fontSize: "0.85rem", outline: "none" }} />
+                  </div>
+                  <button
+                    onClick={async () => {
+                      await fetch("/api/ebay/discover-sellers", {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ minListings: listingRange.min, maxListings: listingRange.max }),
+                      });
+                      setEditingRange(false);
+                      toast(`✅ Rango guardado: ${listingRange.min.toLocaleString()}–${listingRange.max.toLocaleString()}`, "ok");
+                    }}
+                    style={{ padding: "0.38rem 0.9rem", background: "var(--green)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer" }}>
+                    💾 Guardar
+                  </button>
+                  <span style={{ fontSize: "0.72rem", color: "var(--text3)", alignSelf: "center" }}>
+                    El scan buscará vendedores con este rango de listings activos.
+                  </span>
+                </div>
+              )}
+
               {savedSellers.length === 0 && !scanningCategory && (
-                <div style={{ textAlign: "center", color: "var(--text3)", padding: "2rem", fontSize: "0.85rem" }}>
-                  Sin vendedores guardados — escanea una categoría para encontrar vendedores CN
+                <div style={{ textAlign: "center", color: "var(--text3)", padding: "2rem", fontSize: "0.85rem", lineHeight: 1.6 }}>
+                  Sin vendedores guardados — presiona <strong>Scan for CN sellers</strong> para encontrar los top {listingRange.min.toLocaleString()}–{listingRange.max.toLocaleString()} listings
+                </div>
+              )}
+
+              {savedSellers.length > 0 && (
+                <div style={{ fontSize: "0.72rem", color: "var(--text3)" }}>
+                  {savedSellers.length} vendedores encontrados — ordenados por score (apariciones × diversidad de nichos × feedback)
                 </div>
               )}
 
@@ -952,46 +1004,42 @@ export default function Dashboard() {
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
                       {sellers.map(s => (
                         <div key={s.username} style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "0.65rem 0.9rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                          {/* Row 1: username + listings count + delete */}
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                             <a href={s.userUrl} target="_blank" rel="noopener noreferrer"
-                              style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--blue)", textDecoration: "none", flex: 1 }}
-                              title="Open store on eBay">
+                              style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--blue)", textDecoration: "none", flex: 1, minWidth: 120 }}>
                               🏪 {s.username} ↗
                             </a>
                             <span style={{ fontSize: "0.72rem", background: "rgba(16,185,129,0.12)", color: "var(--green)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
                               {s.totalListings.toLocaleString()} listings
                             </span>
-                            {(s as { uniqueQueries?: number }).uniqueQueries ? (
+                            {s.uniqueQueries ? (
                               <span style={{ fontSize: "0.72rem", background: "rgba(168,85,247,0.1)", color: "var(--purple)", border: "1px solid rgba(168,85,247,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
-                                🎯 {(s as { uniqueQueries?: number }).uniqueQueries} niches
+                                🎯 {s.uniqueQueries} nichos
                               </span>
                             ) : null}
-                            {(s as { appearances?: number }).appearances ? (
+                            {s.appearances ? (
                               <span style={{ fontSize: "0.72rem", background: "rgba(16,185,129,0.1)", color: "var(--green)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 99, padding: "0.15rem 0.55rem", whiteSpace: "nowrap" }}>
-                                👁 {(s as { appearances?: number }).appearances} seen
+                                👁 {s.appearances} visto
                               </span>
                             ) : null}
                             <button onClick={() => handleDeleteSeller(s.username)}
                               style={{ fontSize: "0.72rem", padding: "0.2rem 0.5rem", background: "transparent", color: "var(--red)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", cursor: "pointer", flexShrink: 0 }}>✕</button>
                           </div>
 
-                          {/* Row 2: sample titles */}
                           {s.sampleTitles?.slice(0, 2).map((t: string, i: number) => (
                             <div key={i} style={{ fontSize: "0.72rem", color: "var(--text3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                               · {t}
                             </div>
                           ))}
 
-                          {/* Row 3: copy link button */}
                           <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.15rem" }}>
                             <button
-                              onClick={() => { navigator.clipboard.writeText(s.userUrl); }}
+                              onClick={() => { navigator.clipboard.writeText(s.storeUrl); toast("📋 Link copiado", "ok"); }}
                               style={{ fontSize: "0.71rem", padding: "0.22rem 0.6rem", background: "var(--bg3)", color: "var(--text2)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", cursor: "pointer" }}>
-                              📋 Copy link
+                              📋 Copiar link
                             </button>
                             <span style={{ fontSize: "0.7rem", color: "var(--text3)", alignSelf: "center" }}>
-                              Paste link in URL + Store tab to import
+                              Pega en Import Store para importar
                             </span>
                           </div>
                         </div>
