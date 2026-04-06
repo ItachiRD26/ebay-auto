@@ -447,9 +447,12 @@ async function processItem(
     ebayReferencePrice:    pricing.ebayRefPrice,
     ebayShippingCost:      pricing.ebayShippingCost,
     totalMarketCost:       pricing.totalMarketCost,
+    refPriceMin:           pricing.ebayRefPrice,
+    refPriceMax:           pricing.ebayRefPrice,       // Browse API only gives min; updated at publish from GetItem
     eproloPrice:           null,
     eproloUrl:             null,
     suggestedSellingPrice: pricing.suggestedSellingPrice,
+    markupPercent:         6,                          // default 6% — editable per product
     margin:                null,
     marginPercent:         null,
     categoryId,

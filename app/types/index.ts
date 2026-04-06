@@ -20,12 +20,15 @@ export interface QueueProduct {
   storeId?: string;
 
   // Pricing — reference listing (Chinese seller on eBay)
-  ebayReferencePrice:    number;
+  ebayReferencePrice:    number;   // min variant price (used for filters)
   ebayShippingCost:      number;
   totalMarketCost:       number;
+  refPriceMin:           number;   // lowest variant ref price  (for variation range display)
+  refPriceMax:           number;   // highest variant ref price (for variation range display)
 
   // Pricing — our listing
-  suggestedSellingPrice: number;
+  suggestedSellingPrice: number;   // kept for backwards compat (non-variation products)
+  markupPercent:         number;   // 0-100 — applied to each variant's refPrice at publish time
 
   // Eprolo sourcing
   eproloPrice:           number | null;

@@ -22,10 +22,28 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   const [stock, setStock] = useState(product.stock?.toString() ?? "10");
   const [currentImg, setCurrentImg] = useState(0);
   const [publishing, setPublishing] = useState(false);
-  const [delisting, setDelisting]           = useState(false);
+  const [delisting, setDelisting] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-  const [showForceModal, setShowForceModal]       = useState(false);
+  const [showForceModal, setShowForceModal] = useState(false);
 
+  // ── Variation-aware pricing ───────────────────────────────────────────────
+  const hasVariationPricing =
+    (product.refPriceMin ?? 0) > 0 &&
+    (product.refPriceMax ?? 0) > 0 &&
+    (product.refPriceMax ?? 0) >= (product.refPriceMin ?? 0);
+  const isVariation = hasVariationPricing && (product.refPriceMax ?? 0) > (product.refPriceMin ?? 0);
+
+  const defaultMarkup = product.markupPercent ?? 6;
+  const [markupPct, setMarkupPct] = useState<number>(defaultMarkup);
+
+  const varMinPrice = hasVariationPricing
+    ? +((product.refPriceMin ?? product.ebayReferencePrice) * (1 + markupPct / 100)).toFixed(2)
+    : null;
+  const varMaxPrice = hasVariationPricing
+    ? +((product.refPriceMax ?? product.ebayReferencePrice) * (1 + markupPct / 100)).toFixed(2)
+    : null;
+
+  // ── Non-variation pricing ─────────────────────────────────────────────────
   const sellingPrice = parseFloat(price) || 0;
   const costPrice = parseFloat(eproloPrice) || 0;
   const margin = costPrice > 0 ? sellingPrice - costPrice : null;
@@ -35,17 +53,32 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   const handleSave = () => {
     if (editTitle && editTitle !== product.title) onUpdate({ title: editTitle });
     if (editCategoryId && editCategoryId !== product.categoryId) onUpdate({ categoryId: editCategoryId });
-    onUpdate({ suggestedSellingPrice: sellingPrice, eproloPrice: costPrice || null, description, stock: parseInt(stock) || 10, margin, marginPercent: marginPct ? parseFloat(marginPct) : null });
+    if (isVariation) {
+      onUpdate({
+        markupPercent: markupPct,
+        suggestedSellingPrice: varMinPrice ?? product.suggestedSellingPrice,
+        description,
+        stock: parseInt(stock) || 10,
+      });
+    } else {
+      onUpdate({
+        suggestedSellingPrice: sellingPrice,
+        markupPercent: product.totalMarketCost > 0
+          ? Math.round(((sellingPrice / product.totalMarketCost) - 1) * 100)
+          : product.markupPercent ?? 6,
+        eproloPrice: costPrice || null,
+        description,
+        stock: parseInt(stock) || 10,
+        margin,
+        marginPercent: marginPct ? parseFloat(marginPct) : null,
+      });
+    }
     setEditing(false);
   };
 
   const handleForcePublish = async () => {
     setPublishing(true);
-    try {
-      await onForcePublish?.();
-    } finally {
-      setPublishing(false);
-    }
+    try { await onForcePublish?.(); } finally { setPublishing(false); }
   };
 
   const handleDelist = async () => {
@@ -59,24 +92,11 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
       });
       const data = await res.json();
       if (data.error) { alert("Error delisting: " + data.error); } else { alert("✅ Product delisted from eBay"); }
-    } finally {
-      setDelisting(false);
-    }
+    } finally { setDelisting(false); }
   };
 
   const handlePublish = async () => {
     setPublishing(true);
-    // FIX: cuando se reintenta un failed, NO borrar failReason del Firestore antes de llamar
-    // al endpoint de publish. publishProductById lee failReason para detectar wasImproper
-    // y activar el camino de reescritura agresiva (título sin palabras problemáticas).
-    // Si borramos failReason aquí primero, publishProductById ve failReason=null y va por
-    // el camino normal → eBay rechaza de nuevo → pierde un API call innecesario.
-    //
-    // publishProductById ya limpia failReason internamente después de leerlo:
-    //   if (product.failReason) await docRef.update({ failReason: null, status: "approved" })
-    //
-    // ANTES (bug): await onUpdate({ status: "approved", failReason: undefined });
-    // AHORA (fix):  solo actualizamos status visualmente — failReason se preserva en Firestore
     if (product.status === "failed") {
       await onUpdate({ status: "approved" });
     }
@@ -84,14 +104,27 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
     setPublishing(false);
   };
 
+  const saveMarkup = (pct: number) => {
+    onUpdate({
+      markupPercent: pct,
+      suggestedSellingPrice: +((product.refPriceMin ?? product.ebayReferencePrice) * (1 + pct / 100)).toFixed(2),
+    });
+  };
+
   const images = product.images?.length ? product.images : [];
 
   return (
     <div className={`card card-${product.status}`}>
+
+      {/* Image */}
       <div className="img-wrap">
         {images.length > 0 ? (
-          <img src={images[currentImg]} alt={product.title} className="product-img"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+          <img
+            src={images[currentImg]}
+            alt={product.title}
+            className="product-img"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+          />
         ) : (
           <div className="no-img">Sin imagen</div>
         )}
@@ -104,59 +137,132 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         )}
         <div className="img-count">{images.length} photos</div>
         <div className={`status-badge status-${product.status}`}>
-          {product.status === "pending" ? "⏳ Pendiente" : product.status === "approved" ? "✅ Aprobado" : product.status === "published" ? "🚀 Publicado" : "❌ Rejected"}
+          {product.status === "pending" ? "⏳ Pendiente"
+            : product.status === "approved" ? "✅ Aprobado"
+            : product.status === "published" ? "🚀 Publicado"
+            : "❌ Rejected"}
         </div>
       </div>
 
+      {/* Body */}
       <div className="card-body">
         <p className="category">{product.categoryName || "Sin categoría"}</p>
         <h3 className="title">{product.title}</h3>
 
         <div className="meta-row">
-          {(product.soldCount ?? 0) > 0 && <span className="meta-item">📦 {product.soldCount.toLocaleString()} sold</span>}
-          {product.status === "published" && product.listingId
-            ? <a href={`https://www.ebay.com/itm/${product.listingId}`} target="_blank" rel="noreferrer" className="source-link">🛒 Ver mi listing ↗</a>
-            : <a href={product.sourceUrl} target="_blank" rel="noreferrer" className="source-link">View reference ↗</a>
-          }
+          {(product.soldCount ?? 0) > 0 && (
+            <span className="meta-item">📦 {product.soldCount.toLocaleString()} sold</span>
+          )}
+          {product.status === "published" && product.listingId ? (
+            <a href={`https://www.ebay.com/itm/${product.listingId}`} target="_blank" rel="noreferrer" className="source-link">🛒 Ver mi listing ↗</a>
+          ) : (
+            <a href={product.sourceUrl} target="_blank" rel="noreferrer" className="source-link">View reference ↗</a>
+          )}
         </div>
 
+        {/* Pricing */}
         <div className="pricing">
-          <div className="price-row">
-            <div className="price-item">
-              <span className="price-label">Ref. eBay</span>
-              <span className="price-value ref">${product.ebayReferencePrice?.toFixed(2)}</span>
+          {isVariation ? (
+            <div>
+              <div className="price-row" style={{ marginBottom: "0.6rem" }}>
+                <div className="price-item">
+                  <span className="price-label">Ref. eBay</span>
+                  <span className="price-value ref">
+                    ${(product.refPriceMin ?? product.ebayReferencePrice).toFixed(2)}
+                    {(product.refPriceMax ?? 0) > (product.refPriceMin ?? 0) && (
+                      <span style={{ fontSize: "0.8rem", color: "#64748b" }}> – ${product.refPriceMax!.toFixed(2)}</span>
+                    )}
+                  </span>
+                </div>
+                <div className="price-item">
+                  <span className="price-label">Tu rango</span>
+                  <span className="price-value sell">
+                    ${varMinPrice?.toFixed(2)}
+                    {varMaxPrice !== varMinPrice && (
+                      <span style={{ fontSize: "0.8rem" }}> – ${varMaxPrice?.toFixed(2)}</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+              <div style={{ background: "#0d0d14", borderRadius: 6, padding: "0.5rem 0.6rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                  <span className="price-label">Markup</span>
+                  <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                    {[3, 6, 10, 15].map(p => (
+                      <button
+                        key={p}
+                        onClick={() => { setMarkupPct(p); saveMarkup(p); }}
+                        style={{
+                          padding: "1px 7px", borderRadius: 4, fontSize: "0.7rem", fontWeight: 600,
+                          cursor: "pointer", border: "1px solid",
+                          background: markupPct === p ? "#3b82f6" : "transparent",
+                          color: markupPct === p ? "#fff" : "#64748b",
+                          borderColor: markupPct === p ? "#3b82f6" : "#2d3748",
+                        }}
+                      >
+                        {p}%
+                      </button>
+                    ))}
+                    <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: 4 }}>
+                      <input
+                        type="number" min={0} max={100} value={markupPct}
+                        onChange={e => setMarkupPct(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
+                        onBlur={() => saveMarkup(markupPct)}
+                        style={{ width: 40, background: "#0d0d14", border: "1px solid #2d3748", borderRadius: 4, color: "#e2e8f0", fontSize: "0.78rem", padding: "1px 4px", textAlign: "right", outline: "none" }}
+                      />
+                      <span style={{ fontSize: "0.72rem", color: "#64748b" }}>%</span>
+                    </div>
+                  </div>
+                </div>
+                <input
+                  type="range" min={0} max={50} step={1} value={markupPct}
+                  onChange={e => setMarkupPct(parseInt(e.target.value))}
+                  onMouseUp={() => saveMarkup(markupPct)}
+                  onTouchEnd={() => saveMarkup(markupPct)}
+                  style={{ width: "100%", accentColor: "#3b82f6", cursor: "pointer" }}
+                />
+              </div>
             </div>
-            {editing ? (
-              <>
-                <div className="price-item">
-                  <span className="price-label">Costo eProlo</span>
-                  <div className="price-input-wrap"><span className="price-prefix">$</span>
-                    <input className="price-input" value={eproloPrice} onChange={(e) => setEproloPrice(e.target.value)} placeholder="0.00" />
-                  </div>
-                </div>
-                <div className="price-item">
-                  <span className="price-label">Tu precio</span>
-                  <div className="price-input-wrap"><span className="price-prefix">$</span>
-                    <input className="price-input" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00" />
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                {product.eproloPrice && (
+          ) : (
+            <div className="price-row">
+              <div className="price-item">
+                <span className="price-label">Ref. eBay</span>
+                <span className="price-value ref">${product.ebayReferencePrice?.toFixed(2)}</span>
+              </div>
+              {editing ? (
+                <>
                   <div className="price-item">
-                    <span className="price-label">eProlo</span>
-                    <span className="price-value cost">${product.eproloPrice.toFixed(2)}</span>
+                    <span className="price-label">Costo eProlo</span>
+                    <div className="price-input-wrap">
+                      <span className="price-prefix">$</span>
+                      <input className="price-input" value={eproloPrice} onChange={e => setEproloPrice(e.target.value)} placeholder="0.00" />
+                    </div>
                   </div>
-                )}
-                <div className="price-item">
-                  <span className="price-label">Tu precio</span>
-                  <span className="price-value sell">${sellingPrice.toFixed(2)}</span>
-                </div>
-              </>
-            )}
-          </div>
-          {marginPct !== null && (
+                  <div className="price-item">
+                    <span className="price-label">Tu precio</span>
+                    <div className="price-input-wrap">
+                      <span className="price-prefix">$</span>
+                      <input className="price-input" value={price} onChange={e => setPrice(e.target.value)} placeholder="0.00" />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {product.eproloPrice && (
+                    <div className="price-item">
+                      <span className="price-label">eProlo</span>
+                      <span className="price-value cost">${product.eproloPrice.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="price-item">
+                    <span className="price-label">Tu precio</span>
+                    <span className="price-value sell">${sellingPrice.toFixed(2)}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          {!isVariation && marginPct !== null && (
             <div className="margin-bar">
               <span className="margin-label">Margen</span>
               <span className="margin-value" style={{ color: marginColor }}>${margin?.toFixed(2)} · {marginPct}%</span>
@@ -164,50 +270,53 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
           )}
         </div>
 
+        {/* Edit form (non-failed) */}
         {editing && (
           <div className="desc-wrap">
             <label className="field-label">Descripción</label>
-            <textarea className="desc-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short product description..." rows={3} />
+            <textarea className="desc-input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Short product description..." rows={3} />
             <div style={{ marginTop: "0.5rem" }}>
               <label className="field-label">Stock</label>
-              <input className="stock-input" type="number" value={stock} onChange={(e) => setStock(e.target.value)} min="1" />
+              <input className="stock-input" type="number" value={stock} onChange={e => setStock(e.target.value)} min="1" />
             </div>
           </div>
         )}
 
+        {/* Action buttons */}
         <div>
           {product.status === "pending" && (
-            <div className={`actions-pending ${editing ? "actions-pending" : ""}`} style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto 1fr 1fr" : "1fr 1fr" }}>
-              <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ gridColumn: editing ? "1" : "1" }}>{editing ? "✕" : "✏ Edit"}</button>
+            <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto 1fr 1fr" : "1fr 1fr" }}>
+              <button className="btn btn-edit" onClick={() => setEditing(!editing)}>{editing ? "✕" : "✏ Edit"}</button>
               {editing && <button className="btn btn-save" onClick={handleSave}>💾</button>}
               <button className="btn btn-reject" onClick={() => setShowRejectConfirm(true)}>✕ Reject</button>
               <button className="btn btn-approve" onClick={() => { handleSave(); onApprove(); }}>✓ Aprobar</button>
             </div>
           )}
+
           {product.status === "approved" && (
             <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto auto 1fr" : "auto auto 1fr" }}>
-              <button className="btn btn-icon btn-edit" onClick={() => setEditing(!editing)} title={editing ? "Cancel editing" : "Edit"}>
-                {editing ? "✕" : "✏"}
-              </button>
-              {editing && <button className="btn btn-icon btn-save" onClick={handleSave} title="Save changes">💾</button>}
-              <button className="btn btn-icon btn-reject" onClick={() => setShowRejectConfirm(true)} title="Move to rejected">✕</button>
+              <button className="btn btn-icon btn-edit" onClick={() => setEditing(!editing)} title={editing ? "Cancel" : "Edit"}>{editing ? "✕" : "✏"}</button>
+              {editing && <button className="btn btn-icon btn-save" onClick={handleSave} title="Save">💾</button>}
+              <button className="btn btn-icon btn-reject" onClick={() => setShowRejectConfirm(true)} title="Reject">✕</button>
               <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
                 {publishing ? "Publishing..." : "🚀 Publish to eBay"}
               </button>
             </div>
           )}
+
           {product.status === "published" && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.4rem", alignItems: "center" }}>
               <span className="published-info" title={`ID: ${product.listingId}`}>
                 ✅ ID {product.listingId}{product.bidPercentage ? ` · 📢 ${product.bidPercentage}%` : ""}
               </span>
-              <button className="btn btn-delist" onClick={handleDelist} disabled={delisting} title="Delist from eBay" style={{ whiteSpace: "nowrap" }}>
+              <button className="btn btn-delist" onClick={handleDelist} disabled={delisting} style={{ whiteSpace: "nowrap" }}>
                 {delisting ? "..." : "🗑 Delist"}
               </button>
             </div>
           )}
+
           {product.status === "failed" && (
-            <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
               <p className="fail-reason">⚠️ {product.failReason ?? "Error desconocido"}</p>
               <div style={{ display: "flex", gap: "0.4rem" }}>
                 <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ flex: 1 }}>
@@ -223,60 +332,53 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                   </button>
                 )}
               </div>
+
               {editing && (
-                <div style={{ display:"flex", flexDirection:"column", gap:"0.5rem", padding:"0.75rem", background:"#080810", borderRadius:"8px", border:"1px solid #1e2235" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.75rem", background: "#080810", borderRadius: 8, border: "1px solid #1e2235" }}>
                   <label className="field-label">Título (max 80 chars)</label>
                   <input
-                    className="stock-input"
-                    style={{ width:"100%", fontSize:"0.8rem" }}
-                    value={editTitle}
-                    onChange={e => setEditTitle(e.target.value.slice(0, 80))}
+                    className="stock-input" style={{ width: "100%", fontSize: "0.8rem" }}
+                    value={editTitle} onChange={e => setEditTitle(e.target.value.slice(0, 80))}
                     placeholder="Listing title..."
                   />
-                  <div style={{ fontSize:"0.7rem", color: editTitle.length > 75 ? "#ef4444" : "#475569", textAlign:"right" }}>
-                    {editTitle.length}/80
-                  </div>
+                  <div style={{ fontSize: "0.7rem", color: editTitle.length > 75 ? "#ef4444" : "#475569", textAlign: "right" }}>{editTitle.length}/80</div>
+
                   <label className="field-label">Categoría</label>
-                  <select
-                    className="stock-input"
-                    style={{ width:"100%", fontSize:"0.78rem" }}
-                    value={editCategoryId}
-                    onChange={e => setEditCategoryId(e.target.value)}
-                  >
+                  <select className="stock-input" style={{ width: "100%", fontSize: "0.78rem" }} value={editCategoryId} onChange={e => setEditCategoryId(e.target.value)}>
                     <option value="">-- Seleccionar categoría --</option>
-                    <optgroup label="👟 Footwear — Men&apos;s">
-                      <option value="45333">Men&apos;s Loafers &amp; Slip-Ons</option>
-                      <option value="63867">Men&apos;s Slippers</option>
-                      <option value="15709">Men&apos;s Sneakers</option>
-                      <option value="11498">Men&apos;s Boots</option>
-                      <option value="57929">Men&apos;s Dress Shoes</option>
-                      <option value="11499">Men&apos;s Sandals &amp; Flip Flops</option>
+                    <optgroup label="👟 Footwear — Men's">
+                      <option value="45333">Men's Loafers &amp; Slip-Ons</option>
+                      <option value="63867">Men's Slippers</option>
+                      <option value="15709">Men's Sneakers</option>
+                      <option value="11498">Men's Boots</option>
+                      <option value="57929">Men's Dress Shoes</option>
+                      <option value="11499">Men's Sandals &amp; Flip Flops</option>
                     </optgroup>
-                    <optgroup label="👠 Footwear — Women&apos;s">
-                      <option value="55793">Women&apos;s Boots</option>
-                      <option value="55791">Women&apos;s Heels</option>
-                      <option value="55789">Women&apos;s Flats</option>
-                      <option value="57988">Women&apos;s Sneakers</option>
-                      <option value="11504">Women&apos;s Sandals</option>
-                      <option value="63870">Women&apos;s Slippers</option>
-                      <option value="179297">Women&apos;s Loafers &amp; Slip-Ons</option>
-                      <option value="179299">Women&apos;s Mules &amp; Clogs</option>
+                    <optgroup label="👠 Footwear — Women's">
+                      <option value="55793">Women's Boots</option>
+                      <option value="55791">Women's Heels</option>
+                      <option value="55789">Women's Flats</option>
+                      <option value="57988">Women's Sneakers</option>
+                      <option value="11504">Women's Sandals</option>
+                      <option value="63870">Women's Slippers</option>
+                      <option value="179297">Women's Loafers &amp; Slip-Ons</option>
+                      <option value="179299">Women's Mules &amp; Clogs</option>
                     </optgroup>
-                    <optgroup label="👔 Clothing — Men&apos;s">
-                      <option value="53159">Men&apos;s T-Shirts</option>
-                      <option value="15689">Men&apos;s Jeans</option>
-                      <option value="57990">Men&apos;s Jackets &amp; Coats</option>
-                      <option value="57991">Men&apos;s Sweaters</option>
-                      <option value="57992">Men&apos;s Shirts</option>
-                      <option value="15690">Men&apos;s Shorts</option>
+                    <optgroup label="👔 Clothing — Men's">
+                      <option value="53159">Men's T-Shirts</option>
+                      <option value="15689">Men's Jeans</option>
+                      <option value="57990">Men's Jackets &amp; Coats</option>
+                      <option value="57991">Men's Sweaters</option>
+                      <option value="57992">Men's Shirts</option>
+                      <option value="15690">Men's Shorts</option>
                     </optgroup>
-                    <optgroup label="👗 Clothing — Women&apos;s">
-                      <option value="63861">Women&apos;s Dresses</option>
-                      <option value="63862">Women&apos;s Tops &amp; Blouses</option>
-                      <option value="63863">Women&apos;s Pants</option>
-                      <option value="63864">Women&apos;s Jackets &amp; Coats</option>
-                      <option value="63865">Women&apos;s Shorts</option>
-                      <option value="63866">Women&apos;s Sweaters</option>
+                    <optgroup label="👗 Clothing — Women's">
+                      <option value="63861">Women's Dresses</option>
+                      <option value="63862">Women's Tops &amp; Blouses</option>
+                      <option value="63863">Women's Pants</option>
+                      <option value="63864">Women's Jackets &amp; Coats</option>
+                      <option value="63865">Women's Shorts</option>
+                      <option value="63866">Women's Sweaters</option>
                     </optgroup>
                     <optgroup label="🏠 Home &amp; Garden">
                       <option value="20625">Kitchen, Dining &amp; Bar Storage</option>
@@ -291,11 +393,10 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       <option value="92074">Picture Frames</option>
                       <option value="116656">Vases</option>
                       <option value="37592">Household Cleaning Supplies</option>
-                      <option value="112576">Shoe Organizers &amp; Racks</option>
                       <option value="11700">Home &amp; Garden (general)</option>
                     </optgroup>
                     <optgroup label="🐾 Pet Supplies">
-                      <option value="66862">Dog Collars &amp; Tags</option>
+                      <option value="116381">Dog Collars &amp; Tags</option>
                       <option value="66863">Dog Leashes</option>
                       <option value="66864">Dog Harnesses</option>
                       <option value="117426">Dog Beds</option>
@@ -307,9 +408,8 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                     <optgroup label="🚗 Auto">
                       <option value="179690">Car Care</option>
                       <option value="14927">Car Interior Accessories</option>
-                      <option value="116458">Car Phone Holders &amp; Mounts</option>
                     </optgroup>
-                    <optgroup label="📱 Tech Accessories">
+                    <optgroup label="📱 Tech">
                       <option value="175759">Cell Phone Accessories</option>
                       <option value="58058">Laptop &amp; Desktop Accessories</option>
                       <option value="139762">Outlet Adapters &amp; Converters</option>
@@ -322,28 +422,28 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       <option value="169291">Travel Accessories</option>
                       <option value="45229">Luggage</option>
                     </optgroup>
-                    <optgroup label="👶 Baby">
-                      <option value="20394">Baby Feeding Supplies</option>
-                      <option value="162231">Baby Safety</option>
-                    </optgroup>
                     <optgroup label="🌿 Health &amp; Beauty">
                       <option value="26395">Nail Care Tools</option>
                       <option value="45255">Makeup Brushes &amp; Tools</option>
                       <option value="11854">Health Care</option>
                     </optgroup>
                   </select>
+
                   <label className="field-label">Descripción</label>
                   <textarea className="desc-input" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="Descripción del producto..." />
+
                   <label className="field-label">Tu precio ($)</label>
                   <input className="stock-input" type="number" step="0.01" value={price} onChange={e => setPrice(e.target.value)} />
-                  <div style={{ display:"flex", gap:"0.5rem", marginTop:"0.25rem" }}>
-                    <button className="btn btn-save" onClick={handleSave} style={{ flex:1 }}>💾 Guardar cambios</button>
-                    <button className="btn btn-publish" onClick={() => { handleSave(); handlePublish(); }} disabled={publishing} style={{ flex:1 }}>
+
+                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
+                    <button className="btn btn-save" onClick={handleSave} style={{ flex: 1 }}>💾 Guardar cambios</button>
+                    <button className="btn btn-publish" onClick={() => { handleSave(); handlePublish(); }} disabled={publishing} style={{ flex: 1 }}>
                       {publishing ? "Publishing..." : "🚀 Publish now"}
                     </button>
                   </div>
                 </div>
               )}
+
               {!editing && (
                 <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
                   {publishing ? "Reintentando..." : "🔄 Retry without editing"}
@@ -352,7 +452,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             </div>
           )}
         </div>
-      </div>
+      </div>{/* end card-body */}
 
       <style jsx>{`
         .card { background: #0d0d14; border: 1px solid #1e2235; border-radius: 12px; overflow: hidden; transition: border-color 0.2s, transform 0.2s; }
@@ -397,11 +497,6 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         .field-label { display: block; font-size: 0.7rem; color: #4a5568; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.3rem; }
         .desc-input { width: 100%; background: #111120; border: 1px solid #2d3748; border-radius: 6px; color: #e2e8f0; font-size: 0.82rem; padding: 0.5rem; resize: vertical; outline: none; box-sizing: border-box; }
         .stock-input { background: #111120; border: 1px solid #2d3748; border-radius: 6px; color: #e2e8f0; font-size: 0.85rem; padding: 0.3rem 0.5rem; width: 80px; outline: none; }
-        .actions { display: grid; gap: 0.4rem; }
-        .actions-pending  { grid-template-columns: auto auto 1fr 1fr; }
-        .actions-approved { grid-template-columns: auto auto 1fr; }
-        .actions-published { grid-template-columns: 1fr auto; }
-        .actions-failed   { grid-template-columns: 1fr; }
         .btn { padding: 0.5rem 0.7rem; border-radius: 7px; font-size: 0.8rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-icon { padding: 0.5rem 0.65rem; flex-shrink: 0; }
@@ -414,77 +509,31 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         .published-info { font-size: 0.73rem; color: #64748b; display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       `}</style>
 
-
-      {/* ── List Anyway Modal (too many variations) ───────────────────── */}
+      {/* List Anyway Modal */}
       {showForceModal && (
-        <div
-          onClick={() => setShowForceModal(false)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 600,
-            display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{ background: "#0f0f1a", border: "1px solid #4c1d95", borderRadius: 12,
-              width: "100%", maxWidth: 400, overflow: "hidden" }}
-          >
-            {/* Header */}
-            <div style={{ padding: "1rem 1.25rem", borderBottom: "1px solid #1e2235",
-              background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(109,40,217,0.08))" }}>
+        <div onClick={() => setShowForceModal(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#0f0f1a", border: "1px solid #4c1d95", borderRadius: 12, width: "100%", maxWidth: 400, overflow: "hidden" }}>
+            <div style={{ padding: "1rem 1.25rem", borderBottom: "1px solid #1e2235", background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(109,40,217,0.08))" }}>
               <div style={{ fontSize: "1.4rem", marginBottom: "0.3rem" }}>⚡</div>
-              <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#e2e8f0" }}>
-                List with trimmed variations?
-              </div>
+              <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#e2e8f0" }}>List with trimmed variations?</div>
             </div>
-
-            {/* Product preview */}
-            <div style={{ display: "flex", gap: "0.75rem", padding: "0.9rem 1.25rem",
-              borderBottom: "1px solid #1e2235", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: "0.75rem", padding: "0.9rem 1.25rem", borderBottom: "1px solid #1e2235", alignItems: "center" }}>
               {product.images?.[0]
-                ? <img src={product.images[0]} alt="" style={{ width: 52, height: 52,
-                    objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />
+                ? <img src={product.images[0]} alt="" style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />
                 : <div style={{ width: 52, height: 52, background: "#1a1a2e", borderRadius: 6, flexShrink: 0 }} />
               }
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "#cbd5e1",
-                  overflow: "hidden", textOverflow: "ellipsis",
-                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-                  {product.title}
-                </div>
-                <div style={{ fontSize: "0.72rem", color: "#64748b", marginTop: 3 }}>
-                  ${product.suggestedSellingPrice?.toFixed(2)}
-                </div>
+                <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "#cbd5e1", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{product.title}</div>
+                <div style={{ fontSize: "0.72rem", color: "#64748b", marginTop: 3 }}>${product.suggestedSellingPrice?.toFixed(2)}</div>
               </div>
             </div>
-
-            {/* Info */}
             <div style={{ padding: "1rem 1.25rem", fontSize: "0.82rem", color: "#94a3b8", lineHeight: 1.6 }}>
-              <p style={{ margin: 0 }}>
-                This product exceeds your max variations limit. If you list anyway,{" "}
-                <strong style={{ color: "#a78bfa" }}>all variants will be published</strong>{" "}
-                regardless of the limit.
-              </p>
-              <p style={{ margin: "0.6rem 0 0", fontSize: "0.76rem", color: "#64748b" }}>
-                Note: eBay allows up to 250 variations per listing.
-              </p>
+              <p style={{ margin: 0 }}>This product exceeds your max variations limit. If you list anyway, <strong style={{ color: "#a78bfa" }}>all variants will be published</strong> regardless of the limit.</p>
+              <p style={{ margin: "0.6rem 0 0", fontSize: "0.76rem", color: "#64748b" }}>Note: eBay allows up to 250 variations per listing.</p>
             </div>
-
-            {/* Actions */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem",
-              padding: "0 1.25rem 1.25rem" }}>
-              <button
-                onClick={() => setShowForceModal(false)}
-                style={{ padding: "0.6rem", background: "#1a1a2e", border: "1px solid #2d3748",
-                  borderRadius: 7, color: "#94a3b8", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { setShowForceModal(false); handleForcePublish(); }}
-                disabled={publishing}
-                style={{ padding: "0.6rem", background: "linear-gradient(135deg, #7c3aed, #6d28d9)",
-                  border: "none", borderRadius: 7, color: "#fff", fontWeight: 700,
-                  fontSize: "0.85rem", cursor: "pointer", opacity: publishing ? 0.6 : 1 }}
-              >
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", padding: "0 1.25rem 1.25rem" }}>
+              <button onClick={() => setShowForceModal(false)} style={{ padding: "0.6rem", background: "#1a1a2e", border: "1px solid #2d3748", borderRadius: 7, color: "#94a3b8", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}>Cancel</button>
+              <button onClick={() => { setShowForceModal(false); handleForcePublish(); }} disabled={publishing} style={{ padding: "0.6rem", background: "linear-gradient(135deg, #7c3aed, #6d28d9)", border: "none", borderRadius: 7, color: "#fff", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer", opacity: publishing ? 0.6 : 1 }}>
                 {publishing ? "Publishing..." : "⚡ List anyway"}
               </button>
             </div>
@@ -492,60 +541,28 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         </div>
       )}
 
-      {/* ── Reject Confirmation Modal ─────────────────────────────────── */}
+      {/* Reject Confirmation Modal */}
       {showRejectConfirm && (
-        <div
-          onClick={() => setShowRejectConfirm(false)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 600,
-            display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{ background: "#0f0f1a", border: "1px solid #2d3748", borderRadius: 12,
-              width: "100%", maxWidth: 380, overflow: "hidden" }}
-          >
-            <div style={{ display: "flex", gap: "0.75rem", padding: "1rem",
-              borderBottom: "1px solid #1e2235", alignItems: "center" }}>
+        <div onClick={() => setShowRejectConfirm(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#0f0f1a", border: "1px solid #2d3748", borderRadius: 12, width: "100%", maxWidth: 380, overflow: "hidden" }}>
+            <div style={{ display: "flex", gap: "0.75rem", padding: "1rem", borderBottom: "1px solid #1e2235", alignItems: "center" }}>
               {product.images?.[0]
-                ? <img src={product.images[0]} alt="" style={{ width: 56, height: 56,
-                    objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />
+                ? <img src={product.images[0]} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />
                 : <div style={{ width: 56, height: 56, background: "#1a1a2e", borderRadius: 6, flexShrink: 0 }} />
               }
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "#e2e8f0",
-                  overflow: "hidden", textOverflow: "ellipsis",
-                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-                  {product.title}
-                </div>
-                <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: 2 }}>
-                  ${product.suggestedSellingPrice?.toFixed(2)}
-                </div>
+                <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "#e2e8f0", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{product.title}</div>
+                <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: 2 }}>${product.suggestedSellingPrice?.toFixed(2)}</div>
               </div>
             </div>
             <div style={{ padding: "1rem", textAlign: "center" }}>
               <div style={{ fontSize: "1.5rem", marginBottom: "0.5rem" }}>🗑</div>
-              <div style={{ fontSize: "0.88rem", fontWeight: 600, color: "#e2e8f0", marginBottom: "0.35rem" }}>
-                Reject this product?
-              </div>
-              <div style={{ fontSize: "0.78rem", color: "#64748b", lineHeight: 1.5 }}>
-                It will be removed from the queue and won&apos;t appear in future searches.
-              </div>
+              <div style={{ fontSize: "0.88rem", fontWeight: 600, color: "#e2e8f0", marginBottom: "0.35rem" }}>Reject this product?</div>
+              <div style={{ fontSize: "0.78rem", color: "#64748b", lineHeight: 1.5 }}>It will be removed from the queue and won&apos;t appear in future searches.</div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", padding: "0 1rem 1rem" }}>
-              <button
-                onClick={() => setShowRejectConfirm(false)}
-                style={{ padding: "0.55rem", background: "#1a1a2e", border: "1px solid #2d3748",
-                  borderRadius: 7, color: "#94a3b8", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { setShowRejectConfirm(false); onReject(); }}
-                style={{ padding: "0.55rem", background: "#1a0a0a", border: "1px solid #7f1d1d44",
-                  borderRadius: 7, color: "#ef4444", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
-              >
-                ✕ Reject
-              </button>
+              <button onClick={() => setShowRejectConfirm(false)} style={{ padding: "0.55rem", background: "#1a1a2e", border: "1px solid #2d3748", borderRadius: 7, color: "#94a3b8", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}>Cancel</button>
+              <button onClick={() => { setShowRejectConfirm(false); onReject(); }} style={{ padding: "0.55rem", background: "#1a0a0a", border: "1px solid #7f1d1d44", borderRadius: 7, color: "#ef4444", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}>✕ Reject</button>
             </div>
           </div>
         </div>
