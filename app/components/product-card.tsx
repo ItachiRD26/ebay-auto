@@ -66,9 +66,19 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
 
   const handlePublish = async () => {
     setPublishing(true);
-    // If retrying a failed product, reset to approved first
+    // FIX: cuando se reintenta un failed, NO borrar failReason del Firestore antes de llamar
+    // al endpoint de publish. publishProductById lee failReason para detectar wasImproper
+    // y activar el camino de reescritura agresiva (título sin palabras problemáticas).
+    // Si borramos failReason aquí primero, publishProductById ve failReason=null y va por
+    // el camino normal → eBay rechaza de nuevo → pierde un API call innecesario.
+    //
+    // publishProductById ya limpia failReason internamente después de leerlo:
+    //   if (product.failReason) await docRef.update({ failReason: null, status: "approved" })
+    //
+    // ANTES (bug): await onUpdate({ status: "approved", failReason: undefined });
+    // AHORA (fix):  solo actualizamos status visualmente — failReason se preserva en Firestore
     if (product.status === "failed") {
-      await onUpdate({ status: "approved", failReason: undefined });
+      await onUpdate({ status: "approved" });
     }
     await onPublish();
     setPublishing(false);
@@ -234,6 +244,40 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                     onChange={e => setEditCategoryId(e.target.value)}
                   >
                     <option value="">-- Seleccionar categoría --</option>
+                    <optgroup label="👟 Footwear — Men&apos;s">
+                      <option value="45333">Men&apos;s Loafers &amp; Slip-Ons</option>
+                      <option value="63867">Men&apos;s Slippers</option>
+                      <option value="15709">Men&apos;s Sneakers</option>
+                      <option value="11498">Men&apos;s Boots</option>
+                      <option value="57929">Men&apos;s Dress Shoes</option>
+                      <option value="11499">Men&apos;s Sandals &amp; Flip Flops</option>
+                    </optgroup>
+                    <optgroup label="👠 Footwear — Women&apos;s">
+                      <option value="55793">Women&apos;s Boots</option>
+                      <option value="55791">Women&apos;s Heels</option>
+                      <option value="55789">Women&apos;s Flats</option>
+                      <option value="57988">Women&apos;s Sneakers</option>
+                      <option value="11504">Women&apos;s Sandals</option>
+                      <option value="63870">Women&apos;s Slippers</option>
+                      <option value="179297">Women&apos;s Loafers &amp; Slip-Ons</option>
+                      <option value="179299">Women&apos;s Mules &amp; Clogs</option>
+                    </optgroup>
+                    <optgroup label="👔 Clothing — Men&apos;s">
+                      <option value="53159">Men&apos;s T-Shirts</option>
+                      <option value="15689">Men&apos;s Jeans</option>
+                      <option value="57990">Men&apos;s Jackets &amp; Coats</option>
+                      <option value="57991">Men&apos;s Sweaters</option>
+                      <option value="57992">Men&apos;s Shirts</option>
+                      <option value="15690">Men&apos;s Shorts</option>
+                    </optgroup>
+                    <optgroup label="👗 Clothing — Women&apos;s">
+                      <option value="63861">Women&apos;s Dresses</option>
+                      <option value="63862">Women&apos;s Tops &amp; Blouses</option>
+                      <option value="63863">Women&apos;s Pants</option>
+                      <option value="63864">Women&apos;s Jackets &amp; Coats</option>
+                      <option value="63865">Women&apos;s Shorts</option>
+                      <option value="63866">Women&apos;s Sweaters</option>
+                    </optgroup>
                     <optgroup label="🏠 Home &amp; Garden">
                       <option value="20625">Kitchen, Dining &amp; Bar Storage</option>
                       <option value="20686">Mugs &amp; Cups</option>
@@ -251,10 +295,13 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       <option value="11700">Home &amp; Garden (general)</option>
                     </optgroup>
                     <optgroup label="🐾 Pet Supplies">
+                      <option value="66862">Dog Collars &amp; Tags</option>
+                      <option value="66863">Dog Leashes</option>
+                      <option value="66864">Dog Harnesses</option>
                       <option value="117426">Dog Beds</option>
-                      <option value="116381">Dog Collars &amp; Tags</option>
                       <option value="66783">Dog Toys</option>
-                      <option value="20748">Cat Supplies</option>
+                      <option value="20748">Cat Collars &amp; Tags</option>
+                      <option value="20750">Cat Supplies</option>
                       <option value="1281">Pet Supplies (general)</option>
                     </optgroup>
                     <optgroup label="🚗 Auto">
