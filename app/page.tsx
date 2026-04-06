@@ -784,18 +784,22 @@ export default function Dashboard() {
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                   <input
                     value={storeUrlInput} onChange={e => setStoreUrlInput(e.target.value)}
-                    placeholder="eBay store URL — ebay.com/str/... or ebay.com/usr/..."
+                    placeholder="eBay store URL — ebay.com/str/... o username directo"
                     style={{ flex: 1, padding: "0.5rem 0.8rem", background: "var(--bg3)", border: "1px solid var(--border2)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontSize: "0.83rem", outline: "none" }}
                   />
                   <button onClick={handleImportStore} disabled={importingStore || !storeUrlInput.trim()}
                     style={{ flexShrink: 0, padding: "0.5rem 1rem", background: "var(--cyan)", color: "#fff", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
                     {importingStore ? "⏳ Scanning..." : "🏪 Import store"}
                   </button>
+                </div>
+                <div style={{ fontSize: "0.71rem", color: "var(--text3)", marginTop: "0.15rem" }}>
+                  Filtros: precio ≥ $15 · mínimo 3 ventas · sin IP violations · hasta 5,000 listings escaneados → pending para revisión manual
+                </div>
                 {/* Import progress */}
                 {importingStore && (
                   <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.5rem 0.75rem", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", color: "var(--text2)" }}>
                     <div style={{ width: 12, height: 12, border: "2px solid var(--cyan)", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
-                    Scanning store listings — filtering by price and sales. This may take a few minutes...
+                    Escaneando listings — precio ≥ $15, mínimo 3 ventas. Puede tardar unos minutos...
                   </div>
                 )}
                 {importProgress && !importingStore && (
@@ -806,8 +810,6 @@ export default function Dashboard() {
                     </span>
                   </div>
                 )}
-                
-                </div>
               </div>
             )}
           </div>

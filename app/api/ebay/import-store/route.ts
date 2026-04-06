@@ -6,13 +6,12 @@ import { QueueProduct, Settings } from "@/types";
 // ─── Config — 5× more relaxed than search ────────────────────────────────────
 // The store itself is the quality signal. Individual items don't need validation.
 const CONFIG = {
-  MIN_PRICE:      10,    // was 20
-  MAX_PRICE:      500,   // was 250
-  MIN_SOLD:       1,     // was 5 — use GetSellerList's own QuantitySold
+  MIN_PRICE:      15,    // only filter: >= $15
+  MIN_SOLD:       3,     // only filter: >= 3 lifetime sales
   MARKUP_PERCENT: 6,
   STOCK:          1,
-  MAX_ITEMS:      1000,
-  MAX_PAGES:      20,    // 200 items/page × 20 = 4000 max scanned
+  MAX_ITEMS:      5000,  // scan up to 5000 items (Browse API hard limit ~10k)
+  MAX_PAGES:      50,    // 200 items/page × 50 = 10k max
 };
 
 // ─── Slim excluded keywords — only hard IP / adult / dangerous blockers ────────
@@ -215,10 +214,10 @@ export async function POST(req: NextRequest) {
     ]);
     const settings    = (settingsSnap.exists ? settingsSnap.data() : DEFAULT_SETTINGS) as Settings;
     const markupPct   = settings.markupPercent ?? CONFIG.MARKUP_PERCENT;
-    const minPrice    = settings.minPrice  ?? CONFIG.MIN_PRICE;
-    const maxPrice    = settings.maxPrice  ?? CONFIG.MAX_PRICE;
-    // 5× more relaxed than normal search min sold
-    const minSold     = Math.max(1, Math.floor((settings.minSoldCount ?? 5) / 5));
+    // Simple filters: min price ($15) + min sales (3)
+    // User reviews everything in the pending queue — no need for more filters here.
+    const minPrice = 15;
+    const minSold  = 3;
 
     const userBlocked = (kwSnap.data() as { excludedKeywords?: string[] } | undefined)?.excludedKeywords ?? [];
     const extraBlocked = userBlocked.map(k => k.toLowerCase().trim()).filter(Boolean);
@@ -238,7 +237,7 @@ export async function POST(req: NextRequest) {
     const existingIds    = new Set<string>(existingSnap.docs.map(d => String(d.data().ebayItemId ?? "")));
     const existingTitles = new Set<string>(existingSnap.docs.map(d => String(d.data().normalizedTitle ?? "")));
 
-    console.log(`[import-store] Filters: $${minPrice}-$${maxPrice} | minSold=${minSold} | ${existingIds.size} existing items`);
+    console.log(`[import-store] Filters: min $${minPrice} | minSold=${minSold} | existing=${existingIds.size} items`);
 
     // ── Paginate GetSellerList — no per-item API calls ───────────────────────
     let page    = 0;  // Browse API uses 0-based offset pages
@@ -273,15 +272,17 @@ export async function POST(req: NextRequest) {
         seenThisRun.add(item.itemId);
         checked++;
 
-        // ── Local filters — zero API calls ───────────────────────────────
-        if (item.price < minPrice || item.price > maxPrice)          { skipped++; continue; }
-        if (item.condition && !item.condition.toLowerCase().includes("new")) { skipped++; continue; }
-        if (isBanned(item.title, extraBlocked))                      { skipped++; continue; }
-        if (item.sold < minSold)                                      { skipped++; continue; }
-        if (existingIds.has(item.itemId))                             { skipped++; continue; }
+        // ── Filters — minimal by design (status=pending means user reviews manually) ──
+        // Only two hard filters: minimum price + minimum lifetime sales.
+        // No max price, no condition filter, no category filter.
+        // IP/adult blocklist still applies to protect from eBay policy violations.
+        if (item.price < minPrice)                 { skipped++; continue; }
+        if (item.sold < minSold)                   { skipped++; continue; }
+        if (isBanned(item.title, extraBlocked))    { skipped++; continue; }
+        if (existingIds.has(item.itemId))          { skipped++; continue; }
 
         const normTitle = item.title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
-        if (existingTitles.has(normTitle))                            { skipped++; continue; }
+        if (existingTitles.has(normTitle))         { skipped++; continue; }
 
         // ── Build product ─────────────────────────────────────────────────
         const totalMarketCost       = parseFloat((item.price + item.shippingCost).toFixed(2));
@@ -346,7 +347,7 @@ export async function POST(req: NextRequest) {
     }
 
     const message = added === 0
-      ? `No se encontraron productos de "${seller}" en el rango $${minPrice}-$${maxPrice} con al menos ${minSold} venta.`
+      ? `No se encontraron productos de "${seller}" con precio >= $${minPrice} y al menos ${minSold} ventas.`
       : `${added} productos importados de "${seller}" → estado "${importStatus}". ${skipped} descartados.`;
 
     console.log(`[import-store] ✅ Finalizado — added=${added} skipped=${skipped} checked=${checked}`);
