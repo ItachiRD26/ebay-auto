@@ -84,10 +84,14 @@ export const CATEGORY_TYPES: Record<string, CategoryType> = {
   "63865": "clothing_women", // Women's Shorts
   "63866": "clothing_women", // Women's Sweaters
   // ── Pet ───────────────────────────────────────────────────────────────────
-  "66862": "pet_dog",        // Dog Collars & Tags  ← LEAF (verified)
+  // NOTE: 66862 is NOT a leaf (returns 400 from get_item_aspects_for_category)
+  // 116381 is the correct leaf for "Dog Collars & Tags"
+  // 66774  is "Bark Collars" (electronic/shock) — only for training collars
+  "116381":"pet_dog",        // Dog Collars & Tags (leaf — plain/fashion collars)
+  "66774": "pet_dog",        // Bark Collars (leaf — only for electronic/shock collars)
   "66863": "pet_dog",        // Dog Leashes
   "66864": "pet_dog",        // Dog Harnesses
-  "20742": "pet_dog",        // Dog Supplies (fallback)
+  "20742": "pet_dog",        // Dog Supplies (fallback parent)
   "20748": "pet_cat",        // Cat Collars & Tags
   "20750": "pet_cat",        // Cat Supplies
   // ── Home ──────────────────────────────────────────────────────────────────
@@ -122,9 +126,19 @@ export function matchCategoryByTitle(title: string): CategoryMatch {
   const t = title.toLowerCase();
 
   // ── Pet — most specific first ──────────────────────────────────────────────
+  // Bark/shock/training collars — 66774 (Bark Collars, leaf)
+  const isBarkCollar = (t.includes("bark") || t.includes("shock") || t.includes("static") ||
+    t.includes("electric") || t.includes("training collar") || t.includes("remote collar") ||
+    t.includes("e-collar") || t.includes("anti-bark"));
+  if ((t.includes("dog") || t.includes("pet")) && isBarkCollar)
+    return { id: "66774", type: "pet_dog" };
+
+  // Plain/fashion/walking collars — 116381 (Dog Collars & Tags, leaf)
+  // NOT 66862 (parent, returns 400) and NOT 66774 (bark collars)
   const isDogCollar = (t.includes("dog") || t.includes("puppy") || t.includes("pet"))
-    && (t.includes("collar") || t.includes("leash") || t.includes("harness") || t.includes("chain"));
-  if (isDogCollar) return { id: "66862", type: "pet_dog" };
+    && (t.includes("collar") || t.includes("leash") || t.includes("harness") ||
+        t.includes("chain collar") || t.includes("link collar") || t.includes("walking chain"));
+  if (isDogCollar) return { id: "116381", type: "pet_dog" };
 
   const isCatCollar = (t.includes("cat") || t.includes("kitten"))
     && (t.includes("collar") || t.includes("harness"));
@@ -358,9 +372,18 @@ export async function getVerifiedLeafCategory(
     const { getCategoryIdForTitle } = await import("@/lib/ebay");
     const suggested = await getCategoryIdForTitle(title);
     if (suggested) {
-      const suggestedType = CATEGORY_TYPES[suggested] ?? detectTypeFromTitle(title);
-      console.log(`[category] Taxonomy suggestion: ${suggested} (${suggestedType})`);
-      return { id: suggested, type: suggestedType };
+      // Override: Taxonomy API often returns 66774 (Bark Collars) for any "dog collar"
+      // query. That's wrong for plain/fashion collars and triggers extra eBay policy
+      // scrutiny. If the title has no bark/shock/training signals, use 116381 instead.
+      const isBarkCollarSuggestion = suggested === "66774";
+      const titleHasBarkSignals = /bark|shock|static|electric|training collar|remote collar|e-collar|anti.?bark/i.test(title);
+      const finalSuggested = (isBarkCollarSuggestion && !titleHasBarkSignals) ? "116381" : suggested;
+      if (finalSuggested !== suggested) {
+        console.log(`[category] Overriding 66774 (Bark Collars) → 116381 (Dog Collars & Tags) — no bark signals in title`);
+      }
+      const suggestedType = CATEGORY_TYPES[finalSuggested] ?? detectTypeFromTitle(title);
+      console.log(`[category] Taxonomy suggestion: ${finalSuggested} (${suggestedType})`);
+      return { id: finalSuggested, type: suggestedType };
     }
   } catch (e) {
     console.warn("[category] Taxonomy API error:", e);

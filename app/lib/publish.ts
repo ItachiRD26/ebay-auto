@@ -62,6 +62,24 @@ async function findAlternativeReference(title: string, originalItemId: string, u
   } catch (e) { console.warn("[publish] findAlternativeReference error:", e); return null; }
 }
 
+// ─── Shared Claude helper for JSON rewrites ────────────────────────────────────
+async function callClaudeForRewrite(prompt: string, maxTokens = 500): Promise<Record<string, string> | null> {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { content: { type: string; text: string }[] };
+    const text = data.content.find((b: { type: string }) => b.type === "text")?.text ?? "";
+    if (text.trim() === "null") return null;
+    const m = text.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    return JSON.parse(m[0]);
+  } catch { return null; }
+}
+
 async function autoFixWithClaude(errorMsg: string, product: { title: string; description: string; categoryId: string; aspects: Record<string, string[]> }): Promise<{ title?: string; description?: string; categoryId?: string; aspects?: Record<string, string[]> } | null> {
   try {
     const err = errorMsg.toLowerCase();
@@ -72,25 +90,29 @@ async function autoFixWithClaude(errorMsg: string, product: { title: string; des
     let prompt: string;
 
     if (isImproper) {
-      // Fully rewrite title and description to be eBay-safe
-      // Strip everything problematic from title before sending to Claude
-      const cleanTitle = product.title
-        .replace(/[一-鿿　-〿＀-￯]/g, "") // strip Chinese/CJK
-        .replace(/[^\w\s,\-()&]/g, " ")                              // keep safe chars only
-        .replace(/\s{2,}/g, " ")
-        .trim()
-        .slice(0, 75);
-      prompt = `You are an eBay listing writer. Rewrite this product for eBay compliance.
+      // Same ultra-conservative approach as wasImproper path
+      const isForPets = /dog|cat|pet|puppy|kitten|collar|leash|harness/i.test(product.title);
+      prompt = `You are an eBay policy compliance specialist. This listing was REJECTED: "${errorMsg.slice(0,80)}"
+
+eBay's filter flags words with dual meanings. Rewrite using ONLY neutral, unambiguous language.
+
 Product: "${product.title}"
-Clean base title (use as starting point): "${cleanTitle}"
-Rules:
-- Remove ALL brand names, celebrity names, trademarked terms (Nike, Apple, etc.)
-- Remove any Chinese or non-English characters
-- No medical claims, no adult content, no weapons references
-- Professional tone, highlight practical features and benefits only
-- Title max 80 chars, description 2-3 sentences, plain text, no HTML, no URLs
-Return ONLY this JSON (no markdown):
-{"title":"rewritten safe title here","description":"2-3 sentence professional product description here"}`;
+
+WORDS TO NEVER USE:
+chain → "metal link" or "steel collar", choke → "standard" or "flat",
+shock → "vibration" or omit, prong → "textured" or omit,
+strip → "band" or "tape", hard → "firm" or "sturdy",
+tight → "snug" or "secure", drag → "slip-on" or "backless",
+whip, bang, thrust, penetrate, climax, bondage, fetish, restraint → never use
+male (apparel) → "men's"
+
+${isForPets ? 'Include "for dogs", "for pets", or "pet" in the title. This is a pet supply product.' : ""}
+
+Title: max 80 chars, factual only (material + size + function), no brand names.
+Description: 2-3 sentences — material, size/fit, care. NO promotional language.
+
+Return ONLY this JSON:
+{"title":"ultra-safe rewritten title","description":"factual 2-3 sentence description"}`;
     } else if (isMissing) {
       // Extract the specific missing field from the error message
       const styleMatch    = errorMsg.match(/Style/i);
@@ -141,14 +163,7 @@ Return ONLY valid JSON: {"aspects": {"field": ["truncated value"]}}`;
     } else {
       prompt = `You are an eBay listing fixer. Error: "${errorMsg}". Title: ${product.title}. Aspects: ${JSON.stringify(product.aspects).slice(0,200)}. Fix only what the error requires. Return ONLY valid JSON with changed fields, or the text null if unfixable.`;
     }
-    const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": process.env.ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 400, messages: [{ role: "user", content: prompt }] }) });
-    if (!res.ok) return null;
-    const data = await res.json() as { content: { type: string; text: string }[] };
-    const text = data.content.find((b: { type: string }) => b.type === "text")?.text ?? "";
-    if (text.trim() === "null") return null;
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    return JSON.parse(m[0]);
+    return callClaudeForRewrite(prompt, 400);
   } catch { return null; }
 }
 
@@ -434,14 +449,54 @@ export async function publishProductById(productId: string, userToken: string, u
       .replace(/[一-鿿　-〿＀-￯]+/g, " ")  // strip CJK
       .replace(/[^\w\s,\-()'&]/g, " ")                                // safe chars only
       .replace(/\s{2,}/g, " ").trim().slice(0, 75);
-    const fix = await autoFixWithClaude("improper listing policy violation", {
-      title: strippedTitle,
-      description: "",
-      categoryId: "",
-      aspects: refAspects,
-    });
+
+    // Ultra-conservative rewrite: eBay's content filter flags words with dual meanings
+    // even in perfectly innocent contexts (e.g. "chain" = bondage, "strip" = sexual, etc.)
+    const isForPets = /dog|cat|pet|puppy|kitten|collar|leash|harness/i.test(strippedTitle);
+    const improperPrompt = `You are an eBay policy compliance specialist. This listing was REJECTED by eBay's automated content filter.
+
+eBay's filter flags words with dual meanings even in innocent contexts. Rewrite using ONLY neutral, unambiguous language.
+
+Original product: "${strippedTitle}"
+
+WORDS TO NEVER USE (flagged by eBay, even for pet/household products):
+- chain → use "metal link" or "steel collar" or "link design"
+- choke → use "standard" or "traditional" or "flat"
+- shock → use "vibration" or "static" or omit
+- prong → use "textured" or "pinch-style" or omit
+- strip → use "band" or "tape" or "piece"
+- hard → use "firm" or "rigid" or "sturdy"
+- tight → use "snug" or "secure" or "adjustable"
+- whip → omit or use "lead"
+- bang, blast, thrust, penetrate, climax → never use
+- bondage, fetish, restraint → never use
+- drag → use "pull-on" or "slip-on" or "backless"
+- male (for clothing/shoes) → use "men's" or "men"
+
+${isForPets ? `REQUIRED for pet products:
+- Include "for dogs", "for pets", or "pet" in the title
+- Make clear this is a pet supply — not a human product
+- Describe ONLY: material + size range + purpose (e.g. "walking", "training")
+` : ""}
+Title rules:
+- Max 80 chars
+- Factual only: material + size + function
+- No brand names, no medical claims, no superlatives
+- No HTML, no URLs, no Chinese characters
+
+Description rules (2-3 sentences):
+- Sentence 1: material and construction
+- Sentence 2: size/fit information or intended use
+- Sentence 3: care/maintenance or compatibility
+- NO promotional language ("perfect for", "best", "amazing")
+- Plain text only
+
+Return ONLY this JSON (no markdown):
+{"title":"ultra-safe rewritten title here","description":"factual 2-3 sentence description here"}`;
+
+    const fix = await callClaudeForRewrite(improperPrompt);
     publishTitle = fix?.title ?? strippedTitle;
-    publishDesc  = fix?.description ?? `High-quality ${strippedTitle}. Practical and durable for everyday use. Easy to maintain. Fast shipping included.`;
+    publishDesc  = fix?.description ?? `${strippedTitle}. Made from durable materials for everyday use. Easy to clean and maintain.`;
     console.log(`[publish] ♻ Retry after improper — forced clean rewrite: "${publishTitle}"`);
   } else {
     const { title: cleanTitle, description } = await generateTitleAndDescription(product.title, refAspects);
@@ -545,21 +600,40 @@ export async function publishProductById(productId: string, userToken: string, u
         } catch (altErr: unknown) {
           const altMsg = String(altErr instanceof Error ? altErr.message : altErr);
           if (altMsg.includes("improper") || altMsg.includes("policy") || altMsg.includes("leaf") || altMsg.includes("category")) {
-            // Last resort: re-resolve from title alone, minimal aspects
+            // Last resort: re-resolve from title alone, minimal aspects, no variations, no images from blocked seller
             const lastResort = await resolveCategory("20625", publishTitle);
             currentCatId   = lastResort.id;
             currentCatType = lastResort.type;
             publishAspects = { Brand: ["Unbranded"], MPN: ["Does Not Apply"] };
-            console.log(`[publish] 🔧 Último recurso: cat=${currentCatId} para "${publishTitle.slice(0,40)}"`);
-            const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
-            itemId = result4.itemId;
-            console.log(`[publish] ✅ Publicado con fallback máximo — ID: ${itemId}`);
+            // One final ultra-conservative rewrite attempt
+            const lastRewrite = await callClaudeForRewrite(
+              `Rewrite this eBay listing title in the most neutral, factual language possible. It was rejected 3 times for policy violation. Remove ALL ambiguous words. Return ONLY JSON: {"title":"rewritten","description":"factual 2 sentences"}\n\nProduct: "${publishTitle}"`,
+              300,
+            );
+            if (lastRewrite?.title) publishTitle = lastRewrite.title;
+            if (lastRewrite?.description) publishDesc = lastRewrite.description;
+            console.log(`[publish] 🔧 Último recurso: cat=${currentCatId} title="${publishTitle.slice(0,40)}"`);
+            try {
+              const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.slice(0, 3), condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
+              itemId = result4.itemId;
+              console.log(`[publish] ✅ Publicado con fallback máximo — ID: ${itemId}`);
+            } catch (lastErr: unknown) {
+              const lastMsg = String(lastErr instanceof Error ? lastErr.message : lastErr);
+              if (lastMsg.includes("improper") || lastMsg.includes("policy")) {
+                // All 4 attempts failed — seller/product is permanently blocked by eBay
+                // Auto-reject instead of leaving as "failed" (user can't fix this manually)
+                console.log(`[publish] 🚫 ${productId} — 4 intentos fallidos con "improper" → auto-rechazado`);
+                await queueCol(userId).doc(productId).update({
+                  status: "rejected",
+                  failReason: "Bloqueado por eBay (contenido/vendedor). No se puede publicar automáticamente.",
+                  updatedAt: Date.now(),
+                });
+                throw new Error("AUTO-RECHAZADO: bloqueado por eBay tras 4 intentos");
+              }
+              throw lastErr;
+            }
           } else throw altErr;
         }
-      } else if (retryMsg.includes("improper") || retryMsg.includes("policy")) {
-        // Confirmed seller-blocked — auto-reject so it doesn't stay in failed
-        await queueCol(userId).doc(productId).update({ status: "rejected", failReason: "Vendedor de referencia bloqueado por eBay", updatedAt: Date.now() });
-        throw new Error("AUTO-RECHAZADO: vendedor de referencia bloqueado por eBay");
       } else throw retryErr;
     }
   }
