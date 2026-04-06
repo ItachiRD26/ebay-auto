@@ -10,8 +10,8 @@ const CONFIG = {
   MIN_SOLD:       3,     // only filter: >= 3 lifetime sales
   MARKUP_PERCENT: 6,
   STOCK:          1,
-  MAX_ITEMS:      5000,  // scan up to 5000 items (Browse API hard limit ~10k)
-  MAX_PAGES:      50,    // 200 items/page × 50 = 10k max
+  MAX_ITEMS:      50_000, // scan up to 50k unique items across all queries
+  MAX_PAGES:      50,    // kept for reference (not used directly in multi-query scanner)
 };
 
 // ─── Slim excluded keywords — only hard IP / adult / dangerous blockers ────────
@@ -129,7 +129,25 @@ async function browseOnePage(
 //
 // 8 queries × up to 5,000 items each = up to 40,000 coverage points before dedup.
 // In practice covers 60-80% of a store's catalog in 20-50 Browse API calls.
-const SCAN_QUERIES = ["a", "set", "for", "with", "new", "women", "men", "dog"];
+// 15 queries × up to 10,000 items each (Browse API hard cap) = ~150k coverage points before dedup
+// In practice: ~50-80k unique items from a large store with ~400-600 Browse API calls (~8-12 min)
+const SCAN_QUERIES = [
+  "a",          // broadest — catches ~60% of any store
+  "set",        // kits, bundles, multipacks
+  "for",        // descriptive ("X for Y")
+  "with",       // feature listings ("X with Y")
+  "new",        // condition prefix common in titles
+  "women",      // fashion / accessories
+  "men",        // men's products
+  "dog",        // pet supplies
+  "home",       // home & kitchen
+  "kids",       // children's products
+  "black",      // color variant — surfaces different items
+  "portable",   // gadgets, fans, chargers
+  "electric",   // electronics / appliances
+  "1",          // numbered products (size 1, 1-pack, etc.)
+  "bag",        // bags, cases, pouches
+];
 
 async function* scanAllSellerItems(
   seller: string,
@@ -145,7 +163,7 @@ async function* scanAllSellerItems(
     let offset      = 0;
     let queryTotal  = Infinity;
     let pagesFetched = 0;
-    const MAX_PER_QUERY = 25; // 25 pages × 200 = 5,000 items per query
+    const MAX_PER_QUERY = 50; // Browse API hard cap: offset max ~9,800 → 50 pages × 200 = 10,000 items per query
 
     while (offset < queryTotal && pagesFetched < MAX_PER_QUERY && totalYielded < maxItems) {
       const { items, total } = await browseOnePage(seller, q, offset, appToken);
