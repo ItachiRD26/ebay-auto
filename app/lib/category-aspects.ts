@@ -1041,7 +1041,79 @@ export function cleanAndSupplementAspects(
       }
       if (!aspects["Color"]) aspects["Color"] = [inferColor(t)];
       break;
-  }
+
+    default: {
+      // Generic/home/garden/kitchen/travel/sports — trust CN aspects, supplement Type
+      if (!aspects["Color"])    aspects["Color"]    = [inferColor(t)];
+      if (!aspects["Material"]) aspects["Material"] = [inferMaterial(t)];
+      if (!aspects["Type"]) {
+        // Outdoor / Garden
+        if (t.includes("bird bath") || t.includes("birdbath"))
+          aspects["Type"] = ["Bird Bath"];
+        else if (t.includes("waterfall") && t.includes("fountain"))
+          aspects["Type"] = ["Waterfall Fountain"];
+        else if (t.includes("wall") && t.includes("fountain"))
+          aspects["Type"] = ["Wall Fountain"];
+        else if ((t.includes("tabletop") || t.includes("table top")) && t.includes("fountain"))
+          aspects["Type"] = ["Tabletop Fountain"];
+        else if (t.includes("solar") && t.includes("fountain"))
+          aspects["Type"] = ["Solar Fountain"];
+        else if (t.includes("fountain"))
+          aspects["Type"] = ["Outdoor Fountain"];
+        else if (t.includes("bird feeder") || t.includes("birdfeeder"))
+          aspects["Type"] = ["Bird Feeder"];
+        else if (t.includes("wind chime"))    aspects["Type"] = ["Wind Chime"];
+        else if (t.includes("garden stake"))  aspects["Type"] = ["Garden Stake"];
+        else if (t.includes("solar light") || (t.includes("solar") && t.includes("light")))
+          aspects["Type"] = ["Solar Light"];
+        else if (t.includes("sprinkler"))     aspects["Type"] = ["Sprinkler"];
+        else if (t.includes("planter") || t.includes("flower pot"))
+          aspects["Type"] = ["Planter"];
+        // Home decor
+        else if (t.includes("candle holder")) aspects["Type"] = ["Candle Holder"];
+        else if (t.includes("wall art") || t.includes("wall decor"))
+          aspects["Type"] = ["Wall Art"];
+        else if (t.includes("figurine") || t.includes("statue") || t.includes("sculpture"))
+          aspects["Type"] = ["Figurine"];
+        else if (t.includes("wreath"))        aspects["Type"] = ["Wreath"];
+        else if (t.includes("mirror"))        aspects["Type"] = ["Mirror"];
+        else if (t.includes("clock"))         aspects["Type"] = ["Wall Clock"];
+        else if (t.includes("frame"))         aspects["Type"] = ["Picture Frame"];
+        // Kitchen
+        else if (t.includes("cutting board")) aspects["Type"] = ["Cutting Board"];
+        else if (t.includes("grater"))        aspects["Type"] = ["Grater"];
+        else if (t.includes("peeler"))        aspects["Type"] = ["Peeler"];
+        else if (t.includes("colander") || t.includes("strainer"))
+          aspects["Type"] = ["Colander"];
+        else if (t.includes("bowl"))          aspects["Type"] = ["Bowl"];
+        else if (t.includes("tray"))          aspects["Type"] = ["Tray"];
+        else if (t.includes("container") || t.includes("canister"))
+          aspects["Type"] = ["Container"];
+        // Travel / Bags
+        else if (t.includes("packing cube"))  aspects["Type"] = ["Packing Cube"];
+        else if (t.includes("luggage tag"))   aspects["Type"] = ["Luggage Tag"];
+        else if (t.includes("passport"))      aspects["Type"] = ["Passport Holder"];
+        else if (t.includes("toiletry") || t.includes("cosmetic bag"))
+          aspects["Type"] = ["Toiletry Bag"];
+        else if (t.includes("backpack"))      aspects["Type"] = ["Backpack"];
+        else if (t.includes("tote"))          aspects["Type"] = ["Tote Bag"];
+        else if (t.includes("wallet"))        aspects["Type"] = ["Wallet"];
+        // Fitness
+        else if (t.includes("resistance band")) aspects["Type"] = ["Resistance Band"];
+        else if (t.includes("yoga mat"))      aspects["Type"] = ["Yoga Mat"];
+        else if (t.includes("foam roller"))   aspects["Type"] = ["Foam Roller"];
+        else if (t.includes("jump rope"))     aspects["Type"] = ["Jump Rope"];
+        // Lighting
+        else if (t.includes("led strip") || t.includes("strip light"))
+          aspects["Type"] = ["LED Strip Light"];
+        else if (t.includes("night light"))   aspects["Type"] = ["Night Light"];
+        else if (t.includes("lantern"))       aspects["Type"] = ["Lantern"];
+        else if (t.includes("lamp"))          aspects["Type"] = ["Lamp"];
+        else aspects["Type"] = ["Other"];
+      }
+      break;
+    }
+  } // end switch
 
   // ── Step 4: final cleanup ──────────────────────────────────────────────────
   for (const key of Object.keys(aspects)) {
