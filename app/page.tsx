@@ -793,13 +793,13 @@ export default function Dashboard() {
                   </button>
                 </div>
                 <div style={{ fontSize: "0.71rem", color: "var(--text3)", marginTop: "0.15rem" }}>
-                  Filtros: precio ≥ $15 · mínimo 3 ventas · sin IP violations · hasta 5,000 listings escaneados → pending para revisión manual
+                  Filtros: precio ≥ $15 · sin marcas/IP violations · hasta 5,000 listings → pending para revisión manual
                 </div>
                 {/* Import progress */}
                 {importingStore && (
                   <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.5rem 0.75rem", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", color: "var(--text2)" }}>
                     <div style={{ width: 12, height: 12, border: "2px solid var(--cyan)", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
-                    Escaneando listings — precio ≥ $15, mínimo 3 ventas. Puede tardar unos minutos...
+                    Escaneando listings — precio ≥ $15. Puede tardar unos minutos...
                   </div>
                 )}
                 {importProgress && !importingStore && (

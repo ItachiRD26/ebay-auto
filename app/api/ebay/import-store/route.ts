@@ -214,10 +214,11 @@ export async function POST(req: NextRequest) {
     ]);
     const settings    = (settingsSnap.exists ? settingsSnap.data() : DEFAULT_SETTINGS) as Settings;
     const markupPct   = settings.markupPercent ?? CONFIG.MARKUP_PERCENT;
-    // Simple filters: min price ($15) + min sales (3)
-    // User reviews everything in the pending queue — no need for more filters here.
+    // Single filter: min price $15. No sold filter — unitSoldCount from Browse API
+    // is unreliable (often 0/undefined even for items with real sales).
+    // User reviews everything in the pending queue.
     const minPrice = 15;
-    const minSold  = 3;
+    const minSold  = 0; // kept for logging only
 
     const userBlocked = (kwSnap.data() as { excludedKeywords?: string[] } | undefined)?.excludedKeywords ?? [];
     const extraBlocked = userBlocked.map(k => k.toLowerCase().trim()).filter(Boolean);
@@ -237,7 +238,7 @@ export async function POST(req: NextRequest) {
     const existingIds    = new Set<string>(existingSnap.docs.map(d => String(d.data().ebayItemId ?? "")));
     const existingTitles = new Set<string>(existingSnap.docs.map(d => String(d.data().normalizedTitle ?? "")));
 
-    console.log(`[import-store] Filters: min $${minPrice} | minSold=${minSold} | existing=${existingIds.size} items`);
+    console.log(`[import-store] Filters: price >= $${minPrice} | no sold filter (Browse API unreliable) | existing=${existingIds.size} items`);
 
     // ── Paginate GetSellerList — no per-item API calls ───────────────────────
     let page    = 0;  // Browse API uses 0-based offset pages
@@ -277,7 +278,8 @@ export async function POST(req: NextRequest) {
         // No max price, no condition filter, no category filter.
         // IP/adult blocklist still applies to protect from eBay policy violations.
         if (item.price < minPrice)                 { skipped++; continue; }
-        if (item.sold < minSold)                   { skipped++; continue; }
+        // sold filter removed — unitSoldCount is unreliable in Browse API
+        // (undefined = unknown, not 0 sales). User reviews everything in pending.
         if (isBanned(item.title, extraBlocked))    { skipped++; continue; }
         if (existingIds.has(item.itemId))          { skipped++; continue; }
 
