@@ -638,8 +638,42 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
         console.log(`[publish] ✅ Publicado tras corrección de categoría — ID: ${itemId}`);
       } catch (catErr: unknown) {
         const catMsg = String(catErr instanceof Error ? catErr.message : catErr);
-        await docRef.update({ status: "failed", failReason: catMsg.slice(0, 500), updatedAt: Date.now() });
-        throw catErr;
+
+        // After fixing category, if eBay now rejects for "improper" — do one Claude rewrite
+        if (catMsg.includes("improper") || catMsg.includes("policy") || catMsg.includes("violation")) {
+          console.log(`[publish] 🔒 Category fixed but improper detected — Claude rewrite for attempt 3`);
+          const rewrite3 = await callClaudeForRewrite(
+            `eBay rejected this title after a category fix. Generate a completely fresh, safe title.
+Product: "${publishTitle}"
+Return ONLY JSON: {"title":"safe title max 80 chars","description":"2-3 factual sentences"}`, 400
+          );
+          if (rewrite3?.title) publishTitle = rewrite3.title;
+          if (rewrite3?.description) publishDesc = rewrite3.description;
+          try {
+            const result3 = await addFixedPriceItem({
+              title: publishTitle, description: publishDesc,
+              categoryId: refCategoryId, price: product.suggestedSellingPrice,
+              stock: Math.min(product.stock ?? 1, 1), images: refImages,
+              condition: product.condition ?? "New", aspects: publishAspects,
+              variations: refVariations, markupRatio,
+              fulfillmentPolicyId: policies.fulfillmentPolicyId,
+              paymentPolicyId:     policies.paymentPolicyId,
+              returnPolicyId:      policies.returnPolicyId,
+              itemCountry:         policies.itemCountry,
+              itemLocation:        policies.itemLocation,
+            }, userToken);
+            itemId = result3.itemId;
+            console.log(`[publish] ✅ Publicado tras category+improper fix — ID: ${itemId}`);
+          } catch (err3: unknown) {
+            const msg3 = String(err3 instanceof Error ? err3.message : err3);
+            const finalStatus = (msg3.includes("improper") || msg3.includes("policy")) ? "rejected" : "failed";
+            await docRef.update({ status: finalStatus, failReason: msg3.slice(0, 500), updatedAt: Date.now() });
+            throw new Error(msg3);
+          }
+        } else {
+          await docRef.update({ status: "failed", failReason: catMsg.slice(0, 500), updatedAt: Date.now() });
+          throw catErr;
+        }
       }
     } else {
 
