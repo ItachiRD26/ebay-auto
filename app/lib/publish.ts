@@ -326,6 +326,9 @@ async function addFixedPriceItem(product: {
     ? strippedRawDesc.slice(0, 500)
     : `${product.title.replace(/[^\x20-\x7E]/g, " ").trim().slice(0, 60)}. Durable and practical for everyday use. Fast shipping with tracking.`;
 
+  // Log so we can debug "improper" rejections that aren't in the title
+  console.log(`[publish] 📄 Desc sent (${safeDesc.length} chars): "${safeDesc.slice(0, 150)}"`);
+
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials>
@@ -577,6 +580,7 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
   const publishAspects = refAspects; // pass-through — cleanAndSupplementAspects runs inside addFixedPriceItem
 
   console.log(`[publish] 🚀 Attempt 1: cat=${refCategoryId} title="${publishTitle}"`);
+  console.log(`[publish] 📝 Desc attempt 1 (${publishDesc.length} chars): "${publishDesc.slice(0, 120)}"`);
   let itemId: string;
 
   try {
