@@ -333,24 +333,6 @@ export default function Dashboard() {
     toast(`✅ ${ids.length} publicados`, "ok");
   };
 
-  const handleManualList = async (productId: string) => {
-    if (!requireStore()) return;
-    const res = await fetch("/api/ebay/draft", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productId, storeId: selectedStoreId, userId: uid }),
-    });
-    const data = await res.json();
-    if (data.error) { toast("❌ " + data.error, "err"); return; }
-    if (data.mode === "ebay_draft") {
-      toast("✅ Borrador creado en eBay Seller Hub — ve a Listings → Drafts", "ok");
-      window.open(data.sellerHubUrl, "_blank");
-    } else {
-      toast("📋 Datos preparados — abriendo eBay para pre-llenar", "ok");
-      window.open(data.sellUrl, "_blank");
-    }
-  };
-
   const handleRejectAll = async () => {
     const targetStatus = activeTab as string;
     setShowRejectAllConfirm(false);
@@ -1103,7 +1085,6 @@ export default function Dashboard() {
                     onApprove={() => patch(p.id, { status: "approved" })}
                     onReject={() => patch(p.id, { status: "rejected" })}
                     onPublish={() => openPublishModal(p)}
-                    onManualList={() => handleManualList(p.id)}
                     onUpdate={updates => patch(p.id, updates)}
                     onForcePublish={() => handleForcePublish(p)}
                   />
