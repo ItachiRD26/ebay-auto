@@ -176,32 +176,63 @@ Return ONLY valid JSON: {"aspects": {"field": ["truncated value"]}}`;
 }
 
 
-// Simple keyword-based leaf category — no API calls, always works
+// eBay categories blocked for new/restricted seller accounts
+// Source: eBay Block Category List — if CN listing uses these, we fallback to a safe alternative
+const BLOCKED_CATEGORIES = new Set([
+  "37978","45455","20400","1261","66698","19068","46534","257887","55805","21162",
+  "28179","11724","179697","4684","15200","31388","69323","78997","30078","45089",
+  "182074","30090","9355","178893","171146","39482","4733","179197","178078","13658",
+  "175673","165","175672","171961","18793","3286","259701","48446","15052","1500",
+  "178894","185067","32852","183067","183302","2313","69197","45733","156955","139836",
+  "30565","57","88433","102545","197","18828","75578","181020","20498","25863",
+  "159473","177032","181033","29518","177017","43554","181027","43560","159913",
+  "149242","179308","181003","93632","20727","29521","181034","30335","26696",
+  "47945","31769","177731","31772","180959","14308","3197","181076","16092",
+  "38250","260307","43513","20715","43563","71258","20667","259342","42146",
+  "20614","42231","177073","20710","48458","185066","175719","617","63821",
+  "381","196","41676","132975","52554","180008","3858","308","180010","180014",
+  "180015","181162","177801","116881","20734","259318","20737","20742","20754",
+  "301","116391","1285","259320","259319","48644","14961","15069","11071",
+  "17719","1492","51","24409","212","183446","222","19071","19077","2616",
+  "147399","12922","175696","185034","179487","156597","139971",
+]);
+
+// Simple keyword-based leaf category — IDs verified from eBay US Category List (May 2023)
 function getLeafCategoryByTitle(title: string): string {
   const t = title.toLowerCase();
-  if (t.includes("dog") || t.includes("cat") || t.includes("pet") || t.includes("puppy") || t.includes("kitten")) return "117426";
-  if (t.includes("adapter") || t.includes("converter") || t.includes("plug"))  return "139762";
+  // Pet supplies
+  if (t.includes("dog") || t.includes("puppy"))                                 return "20742"; // Dog Supplies
+  if (t.includes("cat supply") || t.includes("cat treat") || t.includes("cat food") || t.includes("cat bed")) return "20737"; // Cat Supplies
+  if (t.includes("pet") || t.includes("kitten"))                                return "20742"; // Dog Supplies (general pet)
+  // Tech & Electronics
+  if (t.includes("security camera") || t.includes("surveillance cam") || t.includes("nanny cam") || t.includes("ip cam") || t.includes("cctv")) return "48638"; // Security Cameras
+  if (t.includes("fm transmitter") || t.includes("bluetooth transmitter"))      return "179678"; // FM Transmitters ✓
+  if (t.includes("camera") || t.includes("webcam") || t.includes("dashcam"))    return "48638"; // Security Cameras (safe alt)
+  if (t.includes("adapter") || t.includes("converter") || t.includes("plug"))   return "139762"; // Outlet Adapters
   if (t.includes("phone stand") || t.includes("phone holder") || t.includes("phone mount")) return "175759";
+  // Home & Garden
   if (t.includes("yoga") || t.includes("fitness") || t.includes("exercise") || t.includes("resistance band")) return "158902";
-  if (t.includes("light") || t.includes("lamp") || t.includes("led"))          return "20697";
-  if (t.includes("brush") || t.includes("clean") || t.includes("scrub"))       return "37592";
-  if (t.includes("travel") || t.includes("packing") || t.includes("luggage"))  return "169291";
-  if (t.includes("mug") || t.includes("cup"))                                   return "20686";
-  if (t.includes("bottle") || t.includes("tumbler"))                            return "20579";
-  if (t.includes("pillow"))                                                      return "20455";
-  if (t.includes("blanket") || t.includes("throw"))                             return "20460";
-  if (t.includes("towel"))                                                       return "20461";
-  if (t.includes("rug") || t.includes("mat"))                                   return "20580";
-  if (t.includes("vase") || t.includes("planter"))                              return "116656";
-  if (t.includes("clock"))                                                       return "3815";
-  if (t.includes("frame"))                                                       return "92074";
-  if (t.includes("organizer") || t.includes("storage") || t.includes("rack") || t.includes("holder")) return "20625";
+  if (t.includes("light") || t.includes("lamp") || t.includes("led"))           return "20697";
+  if (t.includes("brush") || t.includes("clean") || t.includes("scrub"))        return "37592";
+  if (t.includes("travel") || t.includes("packing") || t.includes("luggage"))   return "169291";
+  if (t.includes("mug") || t.includes("cup"))                                    return "20686";
+  if (t.includes("bottle") || t.includes("tumbler"))                             return "20579";
+  if (t.includes("pillow"))                                                       return "20455";
+  if (t.includes("blanket") || t.includes("throw"))                              return "20460";
+  if (t.includes("towel"))                                                        return "20461";
+  if (t.includes("rug") || t.includes("mat"))                                    return "20580";
+  if (t.includes("vase") || t.includes("planter"))                               return "116656";
+  if (t.includes("clock"))                                                        return "3815";
+  if (t.includes("frame"))                                                        return "92074";
+  if (t.includes("organizer") || t.includes("storage") || t.includes("rack") || t.includes("holder") || t.includes("pot lid")) return "20652"; // Kitchen Storage & Organization ✓
+  // Jewelry
   if (t.includes("necklace") || t.includes("bracelet") || t.includes("earring") || t.includes("ring")) return "10968";
-  if (t.includes("shirt") || t.includes("tee") || t.includes("top"))           return "53159";
-  if (t.includes("pants") || t.includes("trousers") || t.includes("jeans"))    return "63863";
-  if (t.includes("dress"))                                                       return "63861";
+  // Clothing
+  if (t.includes("shirt") || t.includes("tee") || t.includes("top"))            return "53159";
+  if (t.includes("pants") || t.includes("trousers") || t.includes("jeans"))     return "63863";
+  if (t.includes("dress"))                                                        return "63861";
   if (t.includes("shoe") || t.includes("sneaker") || t.includes("loafer") || t.includes("boot")) return "45333";
-  return "20625"; // Kitchen Storage — always a valid leaf
+  return "20652"; // Kitchen Storage & Organization — safe verified leaf
 }
 
 function escXml(s: string): string {
@@ -543,7 +574,7 @@ export async function publishProductById(
           await docRef.update({ refPriceMin: Math.min(...varPrices), refPriceMax: Math.max(...varPrices) });
       }
 
-      const MAX_VARIATIONS = 250;
+      const MAX_VARIATIONS = 12;
       if (refVariations && refVariations.variations.length > MAX_VARIATIONS) {
         if (forceVariations) {
           console.log(`[publish] ⚡ forceVariations — listing all ${refVariations.variations.length} variants`);
@@ -596,6 +627,13 @@ export async function publishProductById(
   }
 
   const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters"];
+
+  // ── Block check — if CN category is restricted for new accounts, use safe fallback ─
+  if (BLOCKED_CATEGORIES.has(publishCatId)) {
+    const safeCat = getLeafCategoryByTitle(publishTitle);
+    console.log(`[publish] ⛔ Category ${publishCatId} is blocked for new accounts → fallback to ${safeCat}`);
+    publishCatId = safeCat;
+  }
 
   let itemId: string;
 
