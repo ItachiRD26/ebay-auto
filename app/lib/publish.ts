@@ -604,24 +604,44 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
     console.log(`[publish] ⚠️ Attempt 1 failed: ${msg1.slice(0, 120)}`);
 
     // Only retry if eBay says "improper words" or "category" error
-    // For everything else, mark failed immediately — no point retrying
-    const isImproper = msg1.includes("improper") || msg1.includes("policy") || msg1.includes("violation");
-    const isCategoryErr = msg1.includes("category") || msg1.includes("leaf") || msg1.includes("not a valid");
+    const isImproper    = msg1.includes("improper") || msg1.includes("policy") || msg1.includes("violation");
+    const isCategoryErr = msg1.includes("category") || msg1.includes("leaf") || msg1.includes("not a valid") || msg1.includes("not valid");
 
     if (!isImproper && !isCategoryErr) {
       await docRef.update({ status: "failed", failReason: msg1.slice(0, 500), updatedAt: Date.now() });
       throw err1;
     }
 
-    // If eBay rejected the category → resolve correct leaf category from title
-    if (isCategoryErr) {
+    // ── Category error: fix category, then retry immediately (no title rewrite needed) ──
+    if (isCategoryErr && !isImproper) {
       console.log(`[publish] 📂 Category error — resolving from title: "${publishTitle.slice(0,50)}"`);
       const resolved = await resolveCategory(refCategoryId, publishTitle);
       if (resolved.id !== refCategoryId) {
         console.log(`[publish] 📂 Category override: ${refCategoryId} → ${resolved.id} (${resolved.type})`);
         refCategoryId = resolved.id;
       }
-    }
+      // Retry with fixed category, same title/description/variations — no Claude call needed
+      try {
+        const resultCat = await addFixedPriceItem({
+          title: publishTitle, description: publishDesc,
+          categoryId: refCategoryId, price: product.suggestedSellingPrice,
+          stock: Math.min(product.stock ?? 1, 1), images: refImages,
+          condition: product.condition ?? "New", aspects: publishAspects,
+          variations: refVariations, markupRatio,
+          fulfillmentPolicyId: policies.fulfillmentPolicyId,
+          paymentPolicyId:     policies.paymentPolicyId,
+          returnPolicyId:      policies.returnPolicyId,
+          itemCountry:         policies.itemCountry,
+          itemLocation:        policies.itemLocation,
+        }, userToken);
+        itemId = resultCat.itemId;
+        console.log(`[publish] ✅ Publicado tras corrección de categoría — ID: ${itemId}`);
+      } catch (catErr: unknown) {
+        const catMsg = String(catErr instanceof Error ? catErr.message : catErr);
+        await docRef.update({ status: "failed", failReason: catMsg.slice(0, 500), updatedAt: Date.now() });
+        throw catErr;
+      }
+    } else {
 
     // Attempt 2: Claude describes the product from scratch using aspects + category
     // NOT "rewrite this title" — that causes word-by-word substitution which still fails.
@@ -688,7 +708,8 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
       await docRef.update({ status: finalStatus, failReason, updatedAt: Date.now() });
       throw new Error(failReason);
     }
-  }
+    } // end else (improper)
+  } // end catch (err1)
 
   // ── Step 6: Success — update Firestore ───────────────────────────────────
   await docRef.update({ status: "published", listingId: itemId, failReason: null, updatedAt: Date.now() });
