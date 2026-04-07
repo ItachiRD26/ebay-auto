@@ -72,27 +72,6 @@ Description rules: professional tone, highlight features and practical benefits,
   return { title, description: "" };
 }
 
-async function findAlternativeReference(title: string, originalItemId: string, userToken: string): Promise<{ itemId: string; categoryId: string; aspects: Record<string, string[]>; images: string[] } | null> {
-  try {
-    const appToken = await getAppToken();
-    const params = new URLSearchParams({ q: title.split(" ").slice(0, 5).join(" "), limit: "10", filter: "buyingOptions:{FIXED_PRICE},itemLocationCountry:CN,conditions:{NEW}", fieldgroups: "EXTENDED" });
-    const res = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`, { headers: { Authorization: `Bearer ${appToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" }, signal: AbortSignal.timeout(10000) });
-    if (!res.ok) return null;
-    const data = await res.json() as { itemSummaries?: Record<string, unknown>[] };
-    for (const item of data.itemSummaries ?? []) {
-      const rawId = (item.itemId as string) ?? "";
-      const numericId = rawId.split("|")[1] ?? rawId;
-      if (numericId === originalItemId) continue;
-      if (numericId.startsWith(originalItemId.slice(0, 6))) continue;
-      const refData = await getReferenceItemData(numericId, userToken);
-      if (!refData) continue;
-      console.log(`[publish] 🔍 Alt ref: ${numericId} — ${Object.keys(refData.aspects).length} aspects`);
-      return { itemId: numericId, categoryId: refData.categoryId, aspects: refData.aspects, images: refData.imageUrls };
-    }
-    return null;
-  } catch (e) { console.warn("[publish] findAlternativeReference error:", e); return null; }
-}
-
 // ─── Shared Claude helper for JSON rewrites ────────────────────────────────────
 async function callClaudeForRewrite(prompt: string, maxTokens = 500): Promise<Record<string, string> | null> {
   try {
@@ -446,392 +425,245 @@ async function resolveCategory(
 
 export async function publishProductById(productId: string, userToken: string, userId: string, storeId?: string, forceVariations = false): Promise<{ listingId: string }> {
   const docRef = queueCol(userId).doc(productId);
-  const doc = await docRef.get();
+  const doc    = await docRef.get();
   if (!doc.exists) throw new Error("Product not found");
   const product = doc.data()!;
 
-  const now = new Date();
-  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  // ── Monthly listing limit ─────────────────────────────────────────────────
+  const now       = new Date();
+  const monthKey  = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const counterRef = db.collection("counters").doc(`listings_${monthKey}`);
   const counterDoc = await counterRef.get();
   const currentCount = counterDoc.exists ? (counterDoc.data()!.count as number) : 0;
   const MONTHLY_LIMIT = 245;
-  if (currentCount >= MONTHLY_LIMIT) throw new Error(`Límite mensual alcanzado (${currentCount}/${MONTHLY_LIMIT} listings este mes)`);
+  if (currentCount >= MONTHLY_LIMIT)
+    throw new Error(`Límite mensual alcanzado (${currentCount}/${MONTHLY_LIMIT} listings este mes)`);
 
+  // ── Load policies + settings ──────────────────────────────────────────────
   const sid = storeId ?? (product.storeId as string) ?? "";
   const [policies, userSettingsSnap] = await Promise.all([
     getStorePolicies(userId, sid),
     settingsDoc(userId, "main").get(),
   ]);
-  const userSettings = userSettingsSnap.data() as Record<string, unknown> | undefined;
+  const userSettings   = userSettingsSnap.data() as Record<string, unknown> | undefined;
   const MAX_VARIATIONS = (userSettings?.maxVariations as number) ?? 12;
 
   if (product.failReason) await docRef.update({ failReason: null, status: "approved" });
 
-  let refAspects: Record<string, string[]> = {};
-  let refImages: string[] = product.images ?? [];
-  let refCategoryId = product.categoryId;
-  let refVariations = null;
+  // ── Step 1: GetItem — pull everything from the CN reference listing ────────
+  // Category, aspects, variations, images all come from the CN seller.
+  // They already published this — eBay already accepted this data.
+  // We trust it. We only rewrite title + description.
+  let refAspects:    Record<string, string[]> = {};
+  let refImages:     string[]                 = product.images ?? [];
+  let refCategoryId: string                   = product.categoryId;
+  let refVariations: VariationsData | null    = null;
 
   if (product.ebayItemId) {
-    const rawId = String(product.ebayItemId);
-    const parts = rawId.split("|");
-    const numericItemId = parts.length >= 2 ? parts[1] : rawId;
-    console.log(`[publish] GetItem ref → rawId="${rawId}" numericId="${numericItemId}"`);
-    const refData = await getReferenceItemData(numericItemId, userToken);
-    console.log(`[publish] refData=${refData ? "OK" : "NULL"}`);
+    const rawId        = String(product.ebayItemId);
+    const numericId    = rawId.split("|")[1] ?? rawId;
+    console.log(`[publish] GetItem ref → rawId="${rawId}" numericId="${numericId}"`);
+    const refData = await getReferenceItemData(numericId, userToken);
     if (refData) {
-      refAspects = refData.aspects;
+      refAspects    = refData.aspects;
       if (refData.categoryId) refCategoryId = refData.categoryId;
-      const merged = [...refImages];
+      const merged  = [...refImages];
       refData.imageUrls.forEach((u: string) => { if (!merged.includes(u)) merged.push(u); });
-      refImages = merged.slice(0, 12);
+      refImages     = merged.slice(0, 12);
       refVariations = (refData as unknown as ReferenceItemData).variations ?? null;
 
-      // Update refPriceMin/Max from real GetItem variation data.
-      // Browse API only gives us the cheapest variant; GetItem has all prices.
-      if (refVariations && refVariations.variations.length > 0) {
+      // Update real variation price range in Firestore for the product card
+      if (refVariations?.variations.length) {
         const varPrices = refVariations.variations.map((v: VariationSpec) => v.refPrice).filter((p: number) => p > 0);
-        if (varPrices.length > 0) {
-          const realMin = Math.min(...varPrices);
-          const realMax = Math.max(...varPrices);
-          console.log(`[publish] Variation price range: $${realMin} – $${realMax} (${varPrices.length} variants)`);
-          // Persist updated range to Firestore so product card shows correct range
-          await docRef.update({ refPriceMin: realMin, refPriceMax: realMax });
+        if (varPrices.length) {
+          await docRef.update({ refPriceMin: Math.min(...varPrices), refPriceMax: Math.max(...varPrices) });
         }
       }
 
-      if (refVariations && refVariations.variations.length > MAX_VARIATIONS) {
-        if (forceVariations) {
-          console.log(`[publish] ⚡ forceVariations=true — listing all ${refVariations.variations.length} variants`);
-        } else {
-          throw new Error(`TOO_MANY_VARIATIONS:${refVariations.variations.length}:${MAX_VARIATIONS}`);
-        }
-      }
-      const varInfo = refVariations ? ` | ${refVariations.variations.length} variantes (${Object.keys(refVariations.specificsSet).join(", ")})` : " | sin variantes";
+      if (refVariations && refVariations.variations.length > MAX_VARIATIONS && !forceVariations)
+        throw new Error(`TOO_MANY_VARIATIONS:${refVariations.variations.length}:${MAX_VARIATIONS}`);
+
+      const varInfo = refVariations
+        ? ` | ${refVariations.variations.length} variantes (${Object.keys(refVariations.specificsSet).join(", ")})`
+        : " | sin variantes";
       console.log(`[publish] ${productId} — ${Object.keys(refAspects).length} aspects, ${refImages.length} images${varInfo}`);
     }
   }
 
-  // ── Markup ratio — single source of truth ────────────────────────────────
-  // markupPercent (0-100) is stored per-product and set by the user in the card.
-  // We derive markupRatio from it so all variant prices scale correctly.
-  // Fallback chain: markupPercent → suggestedSellingPrice/totalMarketCost → 1.06
+  // ── Step 2: Markup ratio ──────────────────────────────────────────────────
   const markupPercent: number = (product.markupPercent as number | undefined) ?? 6;
-  const markupRatio = 1 + (markupPercent / 100);
+  const markupRatio = 1 + markupPercent / 100;
 
-  // If previous attempt failed with improper/policy error, skip standard generate
-  // and go straight to aggressive clean rewrite — don't repeat the same mistake
-  const prevFail = String(product.failReason ?? "").toLowerCase();
-  const wasImproper = prevFail.includes("improper") || prevFail.includes("policy") || prevFail.includes("violation");
-
-  // When retrying after improper, always use our local category mapping
-  // instead of trusting the CN seller's category (which may be restricted for new accounts)
-  if (wasImproper && refCategoryId) {
-    // Re-resolve with API validation instead of trusting hardcoded keyword map
-    const localCat = await resolveCategory(refCategoryId, product.title);
-    if (localCat.id !== refCategoryId) {
-      console.log(`[publish] ♻ wasImproper: overriding CN cat ${refCategoryId} → resolved ${localCat.id} (${localCat.type})`);
-      refCategoryId = localCat.id;
-    }
-  }
-
-  // ── Pre-screen title: fast regex pass for the most common flagged patterns ──
-  // Claude's generateTitleAndDescription prompt already handles these intelligently,
-  // but this regex pass runs BEFORE Claude so it prevents Claude from even seeing
-  // the flagged words (Claude sometimes preserves them if they look innocent in context).
-  // Kept minimal — Claude handles the long tail of edge cases.
-  const EBAY_FLAGGED_REPLACEMENTS: [RegExp, string][] = [
-    [/\bclip[- ]?on\b/gi,        "attachable"],
-    [/\bclip\b(?=\s+fan)/gi,     "mount"],
-    [/\bumbrella fan\b/gi,       "portable fan"],
-    [/\bhalf[- ]drag\b/gi,       "backless"],
-    [/\bdrag\b(?=\s+(shoe|mule|flat|sandal|slide|footwear))/gi, "slip-on"],
-    [/\bmale\b(?=\s+(shoe|footwear|apparel|clothing|fashion))/gi, "men's"],
-    [/\bchain\b(?=\s+(collar|leash|dog|pet))/gi, "metal link"],
-    [/\bclamping\b/gi,           "securing"],
+  // ── Step 3: Pre-screen title — fast regex for known flagged words ──────────
+  // Catches the most common cases before Claude sees the title.
+  const PRESCREEN: [RegExp, string][] = [
+    [/clip[- ]?on/gi,      "attachable"],
+    [/clip(?=\s+fan)/gi,   "mount"],
+    [/umbrella fan/gi,     "portable fan"],
+    [/half[- ]drag/gi,     "backless"],
+    [/drag(?=\s+(shoe|mule|flat|sandal|slide))/gi, "slip-on"],
+    [/male(?=\s+(shoe|footwear|apparel|clothing))/gi, "men's"],
+    [/chain(?=\s+(collar|leash|dog|pet))/gi, "metal link"],
+    [/clamping/gi,         "securing"],
+    [/harem/gi,            "wide leg"],
+    [/sexy/gi,             "stylish"],
+    [/lingerie/gi,         "sleepwear"],
+    [/erotic/gi,           "stylish"],
   ];
+  const preScreened = PRESCREEN.reduce((t, [p, r]) => t.replace(p, r), product.title as string).replace(/\s{2,}/g, " ").trim();
+  if (preScreened !== product.title)
+    console.log(`[publish] 🔍 Pre-screen: "${(product.title as string).slice(0,50)}" → "${preScreened.slice(0,50)}"`);
 
-  const preScreenTitle = (t: string): string =>
-    EBAY_FLAGGED_REPLACEMENTS
-      .reduce((s, [pat, rep]) => s.replace(pat, rep), t)
-      .replace(/\s{2,}/g, " ").trim();
-
-  const preScreenedTitle = preScreenTitle(product.title);
-  if (preScreenedTitle !== product.title) {
-    console.log(`[publish] 🔍 Pre-screen: "${product.title.slice(0,50)}" → "${preScreenedTitle.slice(0,50)}"`);
-  }
+  // ── Step 4: Claude rewrites ONLY title + description ──────────────────────
+  // wasImproper = previous attempt was blocked — use aggressive compliance prompt
+  const prevFail    = String(product.failReason ?? "").toLowerCase();
+  const wasImproper = prevFail.includes("improper") || prevFail.includes("policy") || prevFail.includes("violation");
 
   let publishTitle: string;
   let publishDesc:  string;
 
   if (wasImproper) {
-    // Aggressive pre-clean of the title before sending to Claude.
-    // Start from preScreenedTitle (already has flagged words replaced) not product.title
-    const strippedTitle = preScreenedTitle
-      .replace(/[一-鿿　-〿＀-￯]+/g, " ")  // strip any remaining CJK
-      .replace(/[^\w\s,\-()'&]/g, " ")
-      .replace(/\s{2,}/g, " ").trim().slice(0, 75);
+    // Aggressive prompt — previous title was rejected, be maximally conservative
+    const strippedTitle = preScreened.replace(/[一-鿿]/g, " ").replace(/[^\w\s,\-()'&]/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, 75);
+    const rewrite = await callClaudeForRewrite(`You are an eBay policy compliance specialist. This listing was REJECTED by eBay's content filter.
 
-    // Ultra-conservative rewrite: eBay's content filter flags words with dual meanings
-    // even in perfectly innocent contexts (e.g. "chain" = bondage, "strip" = sexual, etc.)
-    const isForPets = /dog|cat|pet|puppy|kitten|collar|leash|harness/i.test(strippedTitle);
-    const improperPrompt = `You are an eBay policy compliance specialist. This listing was REJECTED by eBay's automated content filter.
+Rewrite the title using ONLY neutral, unambiguous, factual language. No words with ANY possible dual meaning.
 
-eBay's filter flags words with dual meanings even in innocent contexts. Rewrite using ONLY neutral, unambiguous language.
+Product: "${strippedTitle}"
 
-Original product: "${strippedTitle}"
+NEVER USE: clip, clamp, chain, strip, hard, tight, drag, harem, sexy, nude, naked, whip, shock, prong, thrust, penetrate, bondage, fetish, restraint, screw, bang, male (for apparel)
 
-WORDS TO NEVER USE (flagged by eBay, even for pet/household products):
-- chain → use "metal link" or "steel collar" or "link design"
-- choke → use "standard" or "traditional" or "flat"
-- shock → use "vibration" or "static" or omit
-- prong → use "textured" or "pinch-style" or omit
-- strip → use "band" or "tape" or "piece"
-- hard → use "firm" or "rigid" or "sturdy"
-- tight → use "snug" or "secure" or "adjustable"
-- whip → omit or use "lead"
-- bang, blast, thrust, penetrate, climax → never use
-- bondage, fetish, restraint → never use
-- drag → use "pull-on" or "slip-on" or "backless"
-- clamp → use "grip" or "bracket" or "holder arm"
-- clamping → use "gripping" or "securing" or "auto-securing"
-- male (for clothing/shoes) → use "men's" or "men"
-
-${isForPets ? `REQUIRED for pet products:
-- Include "for dogs", "for pets", or "pet" in the title
-- Make clear this is a pet supply — not a human product
-- Describe ONLY: material + size range + purpose (e.g. "walking", "training")
-` : ""}
-Title rules:
-- Max 80 chars
-- Factual only: material + size + function
-- No brand names, no medical claims, no superlatives
-- No HTML, no URLs, no Chinese characters
-
-Description rules (2-3 sentences):
-- Sentence 1: material and construction
-- Sentence 2: size/fit information or intended use
-- Sentence 3: care/maintenance or compatibility
-- NO promotional language ("perfect for", "best", "amazing")
-- Plain text only
-
-Return ONLY this JSON (no markdown):
-{"title":"ultra-safe rewritten title here","description":"factual 2-3 sentence description here"}`;
-
-    const fix = await callClaudeForRewrite(improperPrompt);
-    publishTitle = fix?.title ?? strippedTitle;
-    publishDesc  = fix?.description ?? `${strippedTitle}. Made from durable materials for everyday use. Easy to clean and maintain.`;
-    console.log(`[publish] ♻ Retry after improper — forced clean rewrite: "${publishTitle}"`);
+Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-3 factual sentences, professional, no brand names, no URLs"}`, 400);
+    publishTitle = rewrite?.title ?? preScreened;
+    publishDesc  = rewrite?.description ?? "";
+    console.log(`[publish] 🔒 wasImproper rewrite: "${publishTitle}"`);
   } else {
-    const { title: cleanTitle, description } = await generateTitleAndDescription(preScreenedTitle, refAspects);
-    publishTitle = cleanTitle;
-    // Fix: generateTitleAndDescription returns "" on failure — generate a proper fallback
-    publishDesc  = description || `${cleanTitle}. Durable and practical for everyday use. High quality construction. Fast shipping with tracking included.`;
+    const { title, description } = await generateTitleAndDescription(preScreened, refAspects);
+    publishTitle = title;
+    publishDesc  = description || `${title}. Quality construction for everyday use. Ships with tracking.`;
   }
 
-  let itemId: string;
-  // If CN description is image-based, generate from aspects NOW while we have refAspects
+  // Generate description from aspects if CN listing was image-based (no text desc)
   const rawCNDesc = (product.description || "").replace(/<[^>]+>/g, " ").replace(/[^ -~]/g, "").trim();
-  if (rawCNDesc.length < 30 && Object.keys(refAspects).length > 0 && !wasImproper) {
-    const aspectsSummary = Object.entries(refAspects)
-      .filter(([k]) => !["Brand", "MPN", "Item Length", "Item Width", "Item Height"].includes(k))
-      .slice(0, 8).map(([k, v]) => `${k}: ${(v as string[]).join(", ")}`).join("; ");
+  if (rawCNDesc.length < 30 && !publishDesc && Object.keys(refAspects).length > 0) {
+    const aspectsSummary = Object.entries(refAspects).filter(([k]) => !["Brand","MPN","Item Length","Item Width","Item Height"].includes(k)).slice(0, 8).map(([k, v]) => `${k}: ${(v as string[]).join(", ")}`).join("; ");
     try {
-      const descRes = await fetch("https://api.anthropic.com/v1/messages", {
+      const dr = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 200,
-          messages: [{ role: "user", content: `Write a 2-3 sentence eBay product description for: "${publishTitle}". Specs: ${aspectsSummary}. Rules: professional, highlight features/benefits, NO brand names, NO medical claims, NO adult content, NO URLs, plain text only. Return ONLY the description.` }] }),
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 200, messages: [{ role: "user", content: `Write a 2-3 sentence eBay product description for: "${publishTitle}". Specs: ${aspectsSummary}. Rules: professional, highlight features/benefits, NO brand names, NO medical claims, NO adult content, NO URLs, plain text only. Return ONLY the description.` }] }),
       });
-      if (descRes.ok) {
-        const dd = await descRes.json();
+      if (dr.ok) {
+        const dd = await dr.json();
         const gen = (dd.content?.[0]?.text ?? "").trim();
-        if (gen.length > 20) {
-          publishDesc = gen.replace(/<[^>]+>/g, " ").replace(/[^ -~]/g, "").replace(/  +/g, " ").trim();
-          console.log(`[publish] 📝 Description from aspects (CN image-based listing): "${publishDesc.slice(0, 60)}"`);
-        }
+        if (gen.length > 20) { publishDesc = gen.replace(/<[^>]+>/g, " ").replace(/[^ -~]/g, "").replace(/  +/g, " ").trim(); console.log(`[publish] 📝 Desc from aspects: "${publishDesc.slice(0,60)}"`); }
       }
     } catch { /* use existing publishDesc */ }
   }
 
-  // ── Option A: use CN seller's categoryId directly ──────────────────────────
-  // The CN seller published with this category — eBay already accepted it.
-  // We trust it upfront. resolveCategory (API validation) only happens when:
-  //   1. wasImproper retry (CN seller's category might be blocked)
-  //   2. First attempt fails with "leaf" or "category" error (catch handles it)
-  // This saves one Taxonomy API round-trip per product in the happy path.
-  let currentCatId   = refCategoryId || "20625";
-  let currentCatType = CATEGORY_TYPES[currentCatId] ?? detectTypeFromTitle(product.title);
+  // ── Step 5: Publish to eBay — max 2 attempts ──────────────────────────────
+  // Attempt 1: use CN category + CN aspects + CN variations (trust the CN seller)
+  // Attempt 2 (only if "improper"): rewrite title more aggressively, try again
+  // If attempt 2 fails → mark failed, user decides
+  //
+  // We do NOT change category, aspects, or variations between attempts.
+  // The CN seller published with these — eBay already accepted them.
+  const publishAspects = refAspects; // pass-through — cleanAndSupplementAspects runs inside addFixedPriceItem
 
-  if (wasImproper && refCategoryId) {
-    // Don't trust CN category on improper retry — override with validated leaf
-    const resolved = await resolveCategory(currentCatId, product.title);
-    currentCatId   = resolved.id;
-    currentCatType = resolved.type;
-    console.log(`[publish] ♻ wasImproper: overriding CN cat ${refCategoryId} → ${currentCatId} (${currentCatType})`);
-  } else {
-    console.log(`[category] Using CN category directly: ${currentCatId} (${currentCatType})`);
-  }
-
-  let publishAspects = { ...refAspects };
-
-  const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters", "Style", "Department", "Occasion", "Sleeve"];
+  console.log(`[publish] 🚀 Attempt 1: cat=${refCategoryId} title="${publishTitle}"`);
+  let itemId: string;
 
   try {
-    const result = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
-    itemId = result.itemId;
-  } catch (firstErr: unknown) {
-    const errMsg = String(firstErr instanceof Error ? firstErr.message : firstErr);
-    const isFixable = FIXABLE.some(kw => errMsg.toLowerCase().includes(kw.toLowerCase()));
-    if (!isFixable) throw firstErr;
+    const result1 = await addFixedPriceItem({
+      title: publishTitle, description: publishDesc,
+      categoryId: refCategoryId, price: product.suggestedSellingPrice,
+      stock: Math.min(product.stock ?? 1, 1), images: refImages,
+      condition: product.condition ?? "New", aspects: publishAspects,
+      variations: refVariations, markupRatio,
+      fulfillmentPolicyId: policies.fulfillmentPolicyId,
+      paymentPolicyId:     policies.paymentPolicyId,
+      returnPolicyId:      policies.returnPolicyId,
+      itemCountry:         policies.itemCountry,
+      itemLocation:        policies.itemLocation,
+    }, userToken);
+    itemId = result1.itemId;
+    console.log(`[publish] ✅ Publicado en primer intento — ID: ${itemId}`);
 
-    console.log(`[publish] ⚠️ Error fixable detectado — pidiendo a Claude que corrija...`);
-    console.log(`[publish] Error: ${errMsg}`);
+  } catch (err1: unknown) {
+    const msg1 = String(err1 instanceof Error ? err1.message : err1);
+    console.log(`[publish] ⚠️ Attempt 1 failed: ${msg1.slice(0, 120)}`);
 
-    const fix = await autoFixWithClaude(errMsg, { title: publishTitle, description: publishDesc, categoryId: currentCatId, aspects: publishAspects });
+    // Only retry if eBay says "improper words" or "category" error
+    // For everything else, mark failed immediately — no point retrying
+    const isImproper = msg1.includes("improper") || msg1.includes("policy") || msg1.includes("violation");
+    const isCategoryErr = msg1.includes("category") || msg1.includes("leaf") || msg1.includes("not a valid");
 
-    // Category / leaf error → re-resolve with API
-    if (errMsg.includes("category") || errMsg.includes("Categor") || errMsg.includes("leaf")) {
-      const resolved = await resolveCategory(currentCatId, publishTitle);
-      currentCatId   = resolved.id;
-      currentCatType = resolved.type;
-      console.log(`[publish] 🔧 Re-resolved leaf: ${currentCatId} (${currentCatType})`);
-    } else {
-      if (!fix) { console.log("[publish] Claude no pudo corregir"); throw firstErr; }
-      if (fix.title)       { publishTitle   = fix.title;       console.log(`[publish] 🔧 Título corregido: "${fix.title}"`); }
-      if (fix.description) { publishDesc    = fix.description; console.log(`[publish] 🔧 Descripción corregida`); }
-      if (fix.aspects) {
-        // Deep merge: for each key, combine existing + new values, dedupe
-        for (const [k, v] of Object.entries(fix.aspects)) {
-          publishAspects[k] = [...new Set([...(publishAspects[k] ?? []), ...v])].slice(0, 5);
-        }
-        console.log(`[publish] 🔧 Aspects merged:`, fix.aspects);
+    if (!isImproper && !isCategoryErr) {
+      await docRef.update({ status: "failed", failReason: msg1.slice(0, 500), updatedAt: Date.now() });
+      throw err1;
+    }
+
+    // If eBay rejected the category → resolve correct leaf category from title
+    if (isCategoryErr) {
+      console.log(`[publish] 📂 Category error — resolving from title: "${publishTitle.slice(0,50)}"`);
+      const resolved = await resolveCategory(refCategoryId, publishTitle);
+      if (resolved.id !== refCategoryId) {
+        console.log(`[publish] 📂 Category override: ${refCategoryId} → ${resolved.id} (${resolved.type})`);
+        refCategoryId = resolved.id;
       }
     }
 
-    if (errMsg.includes("improper") || errMsg.includes("policy")) {
-      publishDesc = `High-quality ${publishTitle}. Durable construction and practical design. Easy to use and clean. Perfect for everyday use. Fast shipping included.`;
-      console.log(`[publish] 🔧 Descripción genérica neutra aplicada`);
-    }
+    // Attempt 2: aggressive title rewrite, same category/aspects/variations
+    console.log(`[publish] 🔒 Improper detected — Claude aggressive rewrite for attempt 2`);
+    const rewrite2 = await callClaudeForRewrite(`eBay REJECTED this title: "${publishTitle}"
+Reason: improper or policy violation words detected by eBay automated filter.
 
-    console.log(`[publish] 🔄 Reintentando con correcciones...`);
+Rewrite using ONLY neutral, factual, unambiguous language. Every word must be 100% safe.
+NEVER USE: clip, clamp, chain, harem, sexy, nude, drag (clothing), lingerie, erotic, tight, hard, screw, bang, thrust, penetrate, bondage, fetish, whip, shock, prong, male (apparel)
+
+Return ONLY JSON: {"title":"completely safe title max 80 chars","description":"2-3 factual sentences"}`, 400);
+
+    if (rewrite2?.title) publishTitle = rewrite2.title;
+    if (rewrite2?.description) publishDesc = rewrite2.description;
+    console.log(`[publish] 🚀 Attempt 2: title="${publishTitle}"`);
+
     try {
-      const result2 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
+      const result2 = await addFixedPriceItem({
+        title: publishTitle, description: publishDesc,
+        categoryId: refCategoryId, price: product.suggestedSellingPrice,
+        stock: Math.min(product.stock ?? 1, 1), images: refImages,
+        condition: product.condition ?? "New", aspects: publishAspects,
+        variations: refVariations, markupRatio,
+        fulfillmentPolicyId: policies.fulfillmentPolicyId,
+        paymentPolicyId:     policies.paymentPolicyId,
+        returnPolicyId:      policies.returnPolicyId,
+        itemCountry:         policies.itemCountry,
+        itemLocation:        policies.itemLocation,
+      }, userToken);
       itemId = result2.itemId;
-      console.log(`[publish] ✅ Publicado tras corrección automática — ID: ${itemId}`);
-    } catch (retryErr: unknown) {
-      const retryMsg = String(retryErr instanceof Error ? retryErr.message : retryErr);
-      if (retryMsg.includes("improper") || retryMsg.includes("policy")) {
-        console.log(`[publish] 🔍 Buscando listing alternativo para: "${publishTitle}"...`);
-        const altRef = await findAlternativeReference(publishTitle, product.ebayItemId, userToken);
-        if (!altRef) throw new Error(`Vendedor bloqueado y no se encontró referencia alternativa`);
-        console.log(`[publish] ✅ Referencia alternativa encontrada: ${altRef.itemId}`);
-        if (altRef.categoryId) {
-          const altResolved = await resolveCategory(altRef.categoryId, publishTitle);
-          currentCatId   = altResolved.id;
-          currentCatType = altResolved.type;
-        }
-        if (altRef.aspects && Object.keys(altRef.aspects).length > 0) publishAspects = { ...publishAspects, ...altRef.aspects };
-        try {
-          const result3 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.length > 0 ? refImages : altRef.images, condition: product.condition ?? "New", aspects: publishAspects, variations: refVariations, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
-          itemId = result3.itemId;
-          console.log(`[publish] ✅ Publicado con referencia alternativa — ID: ${itemId}`);
-        } catch (altErr: unknown) {
-          const altMsg = String(altErr instanceof Error ? altErr.message : altErr);
-          if (altMsg.includes("improper") || altMsg.includes("policy") || altMsg.includes("leaf") || altMsg.includes("category")) {
-            // Last resort: re-resolve from title alone, minimal aspects, no variations
-            const lastResort = await resolveCategory("20625", publishTitle);
-            currentCatId   = lastResort.id;
-            currentCatType = lastResort.type;
-            // Keep basic inferred aspects so eBay doesn't reject "Color/Upper Material missing"
-            // Don't wipe everything — that causes a new set of "missing" errors.
-            publishAspects = cleanAndSupplementAspects(
-              { Brand: ["Unbranded"], MPN: ["Does Not Apply"] },
-              publishTitle,
-              currentCatType,
-            );
-            // One final ultra-conservative rewrite attempt
-            const lastRewrite = await callClaudeForRewrite(
-              `Rewrite this eBay listing title in the most neutral, factual language possible. It was rejected 3 times for policy violation. Remove ALL ambiguous words. Return ONLY JSON: {"title":"rewritten","description":"factual 2 sentences"}\n\nProduct: "${publishTitle}"`,
-              300,
-            );
-            if (lastRewrite?.title) publishTitle = lastRewrite.title;
-            if (lastRewrite?.description) publishDesc = lastRewrite.description;
-            console.log(`[publish] 🔧 Último recurso: cat=${currentCatId} title="${publishTitle.slice(0,40)}"`);
-            try {
-              const result4 = await addFixedPriceItem({ title: publishTitle, description: publishDesc, categoryId: currentCatId, categoryType: currentCatType, price: product.suggestedSellingPrice, stock: Math.min(product.stock ?? 1, 1), images: refImages.slice(0, 3), condition: product.condition ?? "New", aspects: publishAspects, variations: null, markupRatio , fulfillmentPolicyId: policies.fulfillmentPolicyId, paymentPolicyId: policies.paymentPolicyId, returnPolicyId: policies.returnPolicyId , itemCountry: policies.itemCountry, itemLocation: policies.itemLocation }, userToken);
-              itemId = result4.itemId;
-              console.log(`[publish] ✅ Publicado con fallback máximo — ID: ${itemId}`);
-            } catch (lastErr: unknown) {
-              const lastMsg = String(lastErr instanceof Error ? lastErr.message : lastErr);
-              if (lastMsg.includes("improper") || lastMsg.includes("policy")) {
-                // All 4 attempts failed — seller/product is permanently blocked by eBay
-                // Auto-reject instead of leaving as "failed" (user can't fix this manually)
-                console.log(`[publish] 🚫 ${productId} — 4 intentos fallidos con "improper" → auto-rechazado`);
-                await queueCol(userId).doc(productId).update({
-                  status: "rejected",
-                  failReason: "Bloqueado por eBay (contenido/vendedor). No se puede publicar automáticamente.",
-                  updatedAt: Date.now(),
-                });
-                throw new Error("AUTO-RECHAZADO: bloqueado por eBay tras 4 intentos");
-              }
-              throw lastErr;
-            }
-          } else throw altErr;
-        }
-      } else throw retryErr;
+      console.log(`[publish] ✅ Publicado en segundo intento — ID: ${itemId}`);
+
+    } catch (err2: unknown) {
+      const msg2 = String(err2 instanceof Error ? err2.message : err2);
+      console.log(`[publish] ❌ Attempt 2 failed: ${msg2.slice(0, 120)}`);
+      // Auto-reject if both attempts blocked by "improper" — product can't be listed
+      const finalStatus = (msg2.includes("improper") || msg2.includes("policy")) ? "rejected" : "failed";
+      const failReason  = finalStatus === "rejected"
+        ? `AUTO-RECHAZADO: eBay bloqueó el listing 2 veces por palabras problemáticas. Producto no listable en esta cuenta.`
+        : msg2.slice(0, 500);
+      await docRef.update({ status: finalStatus, failReason, updatedAt: Date.now() });
+      throw new Error(failReason);
     }
   }
 
-  await docRef.update({ status: "published", publishedAt: Date.now(), listingId: itemId!, bidPercentage: 2.0, updatedAt: Date.now() });
+  // ── Step 6: Success — update Firestore ───────────────────────────────────
+  await docRef.update({ status: "published", listingId: itemId, failReason: null, updatedAt: Date.now() });
+  await counterRef.set({ count: currentCount + 1 }, { merge: true });
 
-  // Write to seen_items so it's never re-added to queue even if product is cleaned up later
-  const rawItemId = String(product.ebayItemId ?? "");
-  const numericItemId = rawItemId.split("|")[1] ?? rawItemId;
-  if (numericItemId) {
-    await seenCol(userId).doc(numericItemId).set({
-      ebayItemId:  numericItemId,
-      title:       product.title ?? "",
-      reason:      "published",
-      listingId:   itemId!,
-      seenAt:      Date.now(),
-      productId,
-    });
-  }
-
-  await new Promise(r => setTimeout(r, 3000));
-  await applyPromotedListing(itemId!, userToken);
-  await counterRef.set({ count: currentCount + 1, updatedAt: Date.now() }, { merge: true });
-  console.log(`[publish] ✅ ${productId} → eBay itemId=${itemId} (${currentCount + 1}/${MONTHLY_LIMIT} este mes)`);
-  return { listingId: itemId! };
-}
-
-async function applyPromotedListing(listingId: string, userToken: string): Promise<void> {
+  // ── Step 7: Promoted listings (2%) ───────────────────────────────────────
   try {
-    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials><Item><ItemID>${listingId}</ItemID><PromotedListingDetails><BidPercentage>2.0</BidPercentage><PromotionMethod>COST_PER_SALE</PromotionMethod></PromotedListingDetails></Item></ReviseFixedPriceItemRequest>`;
-    const https = await import("node:https");
-    await new Promise<void>((resolve) => {
-      const buf = Buffer.from(xml, "utf-8");
-      const req = https.request({ hostname: "api.ebay.com", path: "/ws/api.dll", method: "POST", headers: { "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "967", "X-EBAY-API-CALL-NAME": "ReviseFixedPriceItem", "Content-Type": "text/xml", "Content-Length": buf.length.toString() } }, (res) => {
-        const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => { const body = Buffer.concat(chunks).toString("utf-8"); if (body.includes("<Ack>Failure</Ack>")) { const m = body.match(/<LongMessage>(.*?)<\/LongMessage>/); console.warn(`[promote] ⚠️ ${listingId}: ${m?.[1] ?? "Unknown error"}`); } else { console.log(`[promote] ✅ 2% ad applied to ${listingId}`); } resolve(); });
-      });
-      req.on("error", (e) => { console.warn(`[promote] ⚠️ ${listingId}:`, e.message); resolve(); });
-      req.setTimeout(15000, () => { req.destroy(); resolve(); });
-      req.write(buf); req.end();
-    });
-  } catch (e) { console.warn(`[promote] ⚠️ Error for ${listingId}:`, e instanceof Error ? e.message : e); }
-}
+    await applyPromotedListing(itemId, userToken);
+  } catch { /* non-fatal */ }
 
-export async function markPublishFailed(productId: string, reason: string, userId: string): Promise<void> {
-  const isTooManyVariants = reason.startsWith("TOO_MANY_VARIATIONS:");
-  const update: Record<string, unknown> = { status: "failed", failReason: reason, updatedAt: Date.now() };
-  if (isTooManyVariants) {
-    const [, count, max] = reason.split(":");
-    update.failReason = `Too many variations (${count}/${max} max) — click "List anyway" to publish with the ${max} cheapest`;
-    update.tooManyVariations = true;
-  }
-  await queueCol(userId).doc(productId).update(update);
-  console.log(`[publish] ⚠️ ${productId} → failed: ${reason}`);
+  return { listingId: itemId };
 }
