@@ -104,6 +104,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
     setPublishing(false);
   };
 
+
   const saveMarkup = (pct: number) => {
     const base = refMin || product.totalMarketCost || product.ebayReferencePrice || 0;
     onUpdate({
@@ -278,7 +279,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
               </div>
               {publishing && (
                 <div style={{ fontSize: "0.72rem", color: "var(--text3)", textAlign: "center" }}>
-                  🚀 Publicando automáticamente...
+                  {publishing ? "🚀 Publicando automáticamente..." : "🚀 Publicando..."}
                 </div>
               )}
             </div>
