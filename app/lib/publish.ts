@@ -41,6 +41,10 @@ Common flagged words and safe replacements (not exhaustive — use your judgment
 - screw (as verb) → "fasten", "attach"
 - suction cup → "vacuum mount", "adhesive mount"
 - whip, bondage, fetish, restraint → never use
+- loose (apparel) → "relaxed fit" or "comfortable"
+- cropped → "short length" or "ankle length"
+- harem (pants style) → "wide leg" or "relaxed"
+- oversized → "comfortable fit" or "relaxed"
 
 For ANY other word you identify as potentially flagged: use your best judgment to replace it with a neutral, professional alternative that preserves the product meaning.
 
@@ -509,6 +513,8 @@ export async function publishProductById(productId: string, userToken: string, u
     [/sexy/gi,             "stylish"],
     [/lingerie/gi,         "sleepwear"],
     [/erotic/gi,           "stylish"],
+    [/loose/gi,             "relaxed fit"],
+    [/cropped/gi,          "short length"],
   ];
   const preScreened = PRESCREEN.reduce((t, [p, r]) => t.replace(p, r), product.title as string).replace(/\s{2,}/g, " ").trim();
   if (preScreened !== product.title)
@@ -613,15 +619,39 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
       }
     }
 
-    // Attempt 2: aggressive title rewrite, same category/aspects/variations
-    console.log(`[publish] 🔒 Improper detected — Claude aggressive rewrite for attempt 2`);
-    const rewrite2 = await callClaudeForRewrite(`eBay REJECTED this title: "${publishTitle}"
-Reason: improper or policy violation words detected by eBay automated filter.
+    // Attempt 2: Claude describes the product from scratch using aspects + category
+    // NOT "rewrite this title" — that causes word-by-word substitution which still fails.
+    // Instead: "here's what this product IS, generate a fresh US retail title."
+    console.log(`[publish] 🔒 Improper detected — Claude generating fresh title from product type`);
 
-Rewrite using ONLY neutral, factual, unambiguous language. Every word must be 100% safe.
-NEVER USE: clip, clamp, chain, harem, sexy, nude, drag (clothing), lingerie, erotic, tight, hard, screw, bang, thrust, penetrate, bondage, fetish, whip, shock, prong, male (apparel)
+    const aspectsSummary = Object.entries(refAspects)
+      .filter(([k]) => !["Brand", "MPN", "Item Length", "Item Width", "Item Height", "UPC", "EAN"].includes(k))
+      .slice(0, 10)
+      .map(([k, v]) => `${k}: ${(v as string[]).join(", ")}`)
+      .join(" | ");
 
-Return ONLY JSON: {"title":"completely safe title max 80 chars","description":"2-3 factual sentences"}`, 400);
+    const rewrite2 = await callClaudeForRewrite(
+      `You are a professional US eBay seller writing a product listing title.
+
+DO NOT rewrite or reference the original title. Instead, generate a COMPLETELY FRESH title based on what the product actually is.
+
+Product specs: ${aspectsSummary || "no specs available"}
+Original product concept (for reference only — do not copy words): ${publishTitle}
+
+Write a title that a major US retailer would use. Think: how would Target, Amazon, or Walmart describe this?
+- Use standard retail terminology only
+- Describe the product type, material, and key features
+- Max 80 chars
+- No brand names, no Chinese characters
+- NEVER use these words: harem, loose, cropped, sexy, nude, drag, clip, clamp, chain, tight, hard, lingerie, erotic
+Use instead: relaxed fit, short length, wide leg, comfortable, cotton, casual
+Avoid ALL words with dual meanings — use the most neutral retail vocabulary
+
+Also write a 2-3 sentence professional product description.
+
+Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence description"}`,
+      400
+    );
 
     if (rewrite2?.title) publishTitle = rewrite2.title;
     if (rewrite2?.description) publishDesc = rewrite2.description;
