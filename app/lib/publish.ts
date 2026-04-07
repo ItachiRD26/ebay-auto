@@ -548,7 +548,7 @@ export async function publishProductById(
           await docRef.update({ refPriceMin: Math.min(...varPrices), refPriceMax: Math.max(...varPrices) });
       }
 
-      const MAX_VARIATIONS = 12;
+      const MAX_VARIATIONS = 250;
       if (refVariations && refVariations.variations.length > MAX_VARIATIONS) {
         if (forceVariations) {
           console.log(`[publish] ⚡ forceVariations — listing all ${refVariations.variations.length} variants`);
