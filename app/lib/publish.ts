@@ -667,3 +667,45 @@ Return ONLY JSON: {"title":"completely safe title max 80 chars","description":"2
 
   return { listingId: itemId };
 }
+
+async function applyPromotedListing(listingId: string, userToken: string): Promise<void> {
+  try {
+    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials><Item><ItemID>${listingId}</ItemID><PromotedListingDetails><BidPercentage>2.0</BidPercentage><PromotionMethod>COST_PER_SALE</PromotionMethod></PromotedListingDetails></Item></ReviseFixedPriceItemRequest>`;
+    const https = await import("node:https");
+    await new Promise<void>((resolve) => {
+      const buf = Buffer.from(xml, "utf-8");
+      const req = https.request({
+        hostname: "api.ebay.com", path: "/ws/api.dll", method: "POST",
+        headers: { "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "967", "X-EBAY-API-CALL-NAME": "ReviseFixedPriceItem", "Content-Type": "text/xml", "Content-Length": buf.length.toString() }
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf-8");
+          if (body.includes("<Ack>Failure</Ack>")) {
+            const m = body.match(/<LongMessage>(.*?)<\/LongMessage>/);
+            console.warn(`[promote] ⚠️ ${listingId}: ${m?.[1] ?? "Unknown error"}`);
+          } else {
+            console.log(`[promote] ✅ 2% ad applied to ${listingId}`);
+          }
+          resolve();
+        });
+      });
+      req.on("error", (e) => { console.warn(`[promote] ⚠️ ${listingId}:`, e.message); resolve(); });
+      req.setTimeout(15000, () => { req.destroy(); resolve(); });
+      req.write(buf); req.end();
+    });
+  } catch (e) { console.warn(`[promote] ⚠️ Error for ${listingId}:`, e instanceof Error ? e.message : e); }
+}
+
+export async function markPublishFailed(productId: string, reason: string, userId: string): Promise<void> {
+  const isTooManyVariants = reason.startsWith("TOO_MANY_VARIATIONS:");
+  const update: Record<string, unknown> = { status: "failed", failReason: reason, updatedAt: Date.now() };
+  if (isTooManyVariants) {
+    const [, count, max] = reason.split(":");
+    update.failReason = `Too many variations (${count}/${max} max) — click "List anyway" to publish with the ${max} cheapest`;
+    update.tooManyVariations = true;
+  }
+  await queueCol(userId).doc(productId).update(update);
+  console.log(`[publish] ⚠️ ${productId} → failed: ${reason}`);
+}
