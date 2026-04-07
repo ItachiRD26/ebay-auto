@@ -543,7 +543,7 @@ export async function publishProductById(
           await docRef.update({ refPriceMin: Math.min(...varPrices), refPriceMax: Math.max(...varPrices) });
       }
 
-      const MAX_VARIATIONS = 250;
+      const MAX_VARIATIONS = 12;
       if (refVariations && refVariations.variations.length > MAX_VARIATIONS) {
         if (forceVariations) {
           console.log(`[publish] ⚡ forceVariations — listing all ${refVariations.variations.length} variants`);
@@ -586,8 +586,10 @@ export async function publishProductById(
       publishAspects["Style"] = ["Casual"];
     if (!publishAspects["Size Type"])
       publishAspects["Size Type"] = ["Regular"];
-    if (!publishAspects["Size"] && !refVariations?.variations.length)
-      publishAspects["Size"] = [t_title.includes("men") && !t_title.includes("women") ? "US 9" : "US 7"];
+    if (!publishAspects["Size"])
+      publishAspects["Size"] = refVariations?.variations.length
+        ? ["Multiple Sizes"]  // clothing with variations still needs Size as ItemSpecific
+        : [t_title.includes("men") && !t_title.includes("women") ? "US 9" : "US 7"];
     if (!publishAspects["Occasion"])
       publishAspects["Occasion"] = ["Casual"];
     console.log(`[publish] 👕 Clothing aspects pre-filled: Department=${publishAspects["Department"]}, Style=${publishAspects["Style"]}, SizeType=${publishAspects["Size Type"]}`);
@@ -682,6 +684,13 @@ export async function publishProductById(
         if (altRef.categoryId) publishCatId = altRef.categoryId;
         if (altRef.aspects && Object.keys(altRef.aspects).length > 0)
           publishAspects = { ...publishAspects, ...altRef.aspects };
+        // Re-apply clothing aspects — alt ref merge may have overwritten them
+        if (isClothingCat || isClothingTitle) {
+          if (!publishAspects["Department"]) publishAspects["Department"] = [t_title.includes("men") && !t_title.includes("women") ? "Men" : "Women"];
+          if (!publishAspects["Style"])      publishAspects["Style"]      = ["Casual"];
+          if (!publishAspects["Size Type"])  publishAspects["Size Type"]  = ["Regular"];
+          if (!publishAspects["Size"])       publishAspects["Size"]       = refVariations?.variations.length ? ["Multiple Sizes"] : ["US 7"];
+        }
 
         try {
           const r3 = await addFixedPriceItem({
