@@ -160,14 +160,9 @@ Return ONLY this JSON:
         aspectsToAdd[field] = [smartDefaults[field] ?? "Other"];
       }
 
-      prompt = `You are an eBay listing fixer. The listing is missing required item specifics.
-Product title: "${product.title}"
-Missing fields: ${fields.join(", ")}
-Current aspects: ${JSON.stringify(product.aspects).slice(0, 200)}
-Pre-computed defaults: ${JSON.stringify(smartDefaults)}
-
-Return ONLY this JSON with appropriate values for the missing fields (use the pre-computed defaults as guidance, improve if you can based on the title):
-{"aspects": ${JSON.stringify(aspectsToAdd)}}`;
+      // Apply directly — no need to ask Claude, smartDefaults already has the right values
+      console.log(`[publish] 🔧 Adding missing aspects directly:`, aspectsToAdd);
+      return { aspects: aspectsToAdd };
     } else if (isTooLong) {
       prompt = `Fix this eBay listing error: "${errorMsg}".
 Aspects: ${JSON.stringify(product.aspects).slice(0, 300)}.
@@ -548,7 +543,7 @@ export async function publishProductById(
           await docRef.update({ refPriceMin: Math.min(...varPrices), refPriceMax: Math.max(...varPrices) });
       }
 
-      const MAX_VARIATIONS = 250;
+      const MAX_VARIATIONS = 12;
       if (refVariations && refVariations.variations.length > MAX_VARIATIONS) {
         if (forceVariations) {
           console.log(`[publish] ⚡ forceVariations — listing all ${refVariations.variations.length} variants`);
@@ -617,7 +612,12 @@ export async function publishProductById(
       if (!fix) { console.log("[publish] Claude no pudo corregir"); throw firstErr; }
       if (fix.title)       { publishTitle   = fix.title;                              console.log(`[publish] 🔧 Título: "${fix.title}"`); }
       if (fix.description) { publishDesc    = fix.description;                        console.log(`[publish] 🔧 Descripción corregida`); }
-      if (fix.aspects)     { publishAspects = { ...publishAspects, ...fix.aspects };  console.log(`[publish] 🔧 Aspects:`, fix.aspects); }
+      if (fix.aspects)     {
+        for (const [k, v] of Object.entries(fix.aspects)) {
+          publishAspects[k] = Array.isArray(v) ? v : [String(v)];
+        }
+        console.log(`[publish] 🔧 Aspects merged:`, fix.aspects);
+      }
     }
 
     if (errMsg.includes("improper") || errMsg.includes("policy")) {
