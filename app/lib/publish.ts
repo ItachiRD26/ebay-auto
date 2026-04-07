@@ -571,6 +571,28 @@ export async function publishProductById(
   let publishCatId  = refCategoryId || getLeafCategoryByTitle(product.title as string);
   let publishAspects = { ...refAspects };
 
+  // ── Pre-populate required aspects for clothing categories ─────────────────
+  // GetItem often doesn't return Department/Style/Size/SizeType for CN clothing.
+  // eBay requires them — add defaults upfront so attempt 1 doesn't fail for this reason.
+  const CLOTHING_CATS = new Set(["63863","63861","53159","63862","57990","11483","11484","15724","11517","177"]);
+  const t_title = (product.title as string).toLowerCase();
+  const isClothingCat = CLOTHING_CATS.has(publishCatId);
+  const isClothingTitle = ["pants","trousers","shirt","dress","top","blouse","skirt","jacket","coat","shorts","jeans","legging","hoodie","sweater","vest","tank"].some(w => t_title.includes(w));
+
+  if (isClothingCat || isClothingTitle) {
+    if (!publishAspects["Department"])
+      publishAspects["Department"] = [t_title.includes("men") && !t_title.includes("women") ? "Men" : t_title.includes("kid") || t_title.includes("boy") || t_title.includes("girl") ? "Kids" : "Women"];
+    if (!publishAspects["Style"])
+      publishAspects["Style"] = ["Casual"];
+    if (!publishAspects["Size Type"])
+      publishAspects["Size Type"] = ["Regular"];
+    if (!publishAspects["Size"] && !refVariations?.variations.length)
+      publishAspects["Size"] = [t_title.includes("men") && !t_title.includes("women") ? "US 9" : "US 7"];
+    if (!publishAspects["Occasion"])
+      publishAspects["Occasion"] = ["Casual"];
+    console.log(`[publish] 👕 Clothing aspects pre-filled: Department=${publishAspects["Department"]}, Style=${publishAspects["Style"]}, SizeType=${publishAspects["Size Type"]}`);
+  }
+
   const FIXABLE = ["missing", "category", "leaf", "improper", "policy", "violation", "Model", "item specific", "too long", "characters"];
 
   let itemId: string;
