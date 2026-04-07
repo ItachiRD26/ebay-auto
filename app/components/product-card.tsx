@@ -8,11 +8,12 @@ interface Props {
   onApprove: () => void;
   onReject: () => void;
   onPublish: () => void;
+  onManualList: () => void;
   onForcePublish?: () => void;
   onUpdate: (updates: Partial<QueueProduct>) => void;
 }
 
-export default function ProductCard({ product, onApprove, onReject, onPublish, onForcePublish, onUpdate }: Props) {
+export default function ProductCard({ product, onApprove, onReject, onPublish, onManualList, onForcePublish, onUpdate }: Props) {
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(product.title ?? "");
   const [editCategoryId, setEditCategoryId] = useState(product.categoryId ?? "");
@@ -22,6 +23,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   const [stock, setStock] = useState(product.stock?.toString() ?? "10");
   const [currentImg, setCurrentImg] = useState(0);
   const [publishing, setPublishing] = useState(false);
+  const [manualListing, setManualListing] = useState(false);
   const [delisting, setDelisting] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
   const [showForceModal, setShowForceModal] = useState(false);
@@ -102,6 +104,15 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
     }
     await onPublish();
     setPublishing(false);
+  };
+
+  const handleManualList = async () => {
+    setManualListing(true);
+    try {
+      await onManualList();
+    } finally {
+      setManualListing(false);
+    }
   };
 
   const saveMarkup = (pct: number) => {
@@ -191,8 +202,8 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             )}
           </div>
 
-          {/* Markup selector — shown for all products */}
-          {showMarkupUI && (
+          {/* Markup selector — only when editing */}
+          {showMarkupUI && editing && (
             <div style={{ background: "#0d0d14", borderRadius: 6, padding: "0.5rem 0.6rem" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
                 <span className="price-label">Markup</span>
@@ -266,13 +277,28 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
           )}
 
           {product.status === "approved" && (
-            <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto auto 1fr" : "auto auto 1fr" }}>
-              <button className="btn btn-icon btn-edit" onClick={() => setEditing(!editing)} title={editing ? "Cancel" : "Edit"}>{editing ? "✕" : "✏"}</button>
-              {editing && <button className="btn btn-icon btn-save" onClick={handleSave} title="Save">💾</button>}
-              <button className="btn btn-icon btn-reject" onClick={() => setShowRejectConfirm(true)} title="Reject">✕</button>
-              <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
-                {publishing ? "Publishing..." : "🚀 Publish to eBay"}
-              </button>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+              <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: editing ? "auto auto auto 1fr 1fr" : "auto auto 1fr 1fr" }}>
+                <button className="btn btn-icon btn-edit" onClick={() => setEditing(!editing)} title={editing ? "Cancel" : "Edit"}>{editing ? "✕" : "✏"}</button>
+                {editing && <button className="btn btn-icon btn-save" onClick={handleSave} title="Save">💾</button>}
+                <button className="btn btn-icon btn-reject" onClick={() => setShowRejectConfirm(true)} title="Reject">✕</button>
+                <button className="btn btn-publish" onClick={handlePublish} disabled={publishing || manualListing}
+                  title="DropFlow publica automáticamente con Claude" style={{ fontSize: "0.78rem" }}>
+                  {publishing ? "..." : "🚀 Auto"}
+                </button>
+                <button
+                  onClick={handleManualList}
+                  disabled={publishing || manualListing}
+                  title="Prepara el listing y lo guarda como borrador en eBay para que tú lo publiques"
+                  style={{ padding: "0.5rem 0.7rem", borderRadius: 7, fontSize: "0.78rem", fontWeight: 600, cursor: "pointer", border: "1px solid #0ea5e9", background: "transparent", color: "#0ea5e9", opacity: (publishing || manualListing) ? 0.5 : 1 }}>
+                  {manualListing ? "..." : "✋ Manual"}
+                </button>
+              </div>
+              {(publishing || manualListing) && (
+                <div style={{ fontSize: "0.72rem", color: "var(--text3)", textAlign: "center" }}>
+                  {publishing ? "🚀 Publicando automáticamente..." : "✋ Preparando borrador en eBay..."}
+                </div>
+              )}
             </div>
           )}
 
