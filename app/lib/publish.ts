@@ -713,7 +713,19 @@ export async function publishProductById(
           if (altMsg.includes("improper") || altMsg.includes("policy") || altMsg.includes("leaf") || altMsg.includes("category")) {
             // ── Attempt 4: last resort ──────────────────────────────────
             publishCatId   = getLeafCategoryByTitle(publishTitle);
-            publishAspects = { Brand: ["Unbranded"], MPN: ["Does Not Apply"] };
+            // Keep clothing aspects — only reset Brand/MPN
+            publishAspects = {
+              ...publishAspects,
+              Brand: ["Unbranded"],
+              MPN:   ["Does Not Apply"],
+            };
+            // Re-ensure clothing aspects are present
+            if (isClothingCat || isClothingTitle) {
+              if (!publishAspects["Department"]) publishAspects["Department"] = [t_title.includes("men") && !t_title.includes("women") ? "Men" : "Women"];
+              if (!publishAspects["Style"])      publishAspects["Style"]      = ["Casual"];
+              if (!publishAspects["Size Type"])  publishAspects["Size Type"]  = ["Regular"];
+              if (!publishAspects["Size"])       publishAspects["Size"]       = refVariations?.variations.length ? ["Multiple Sizes"] : ["US 7"];
+            }
             console.log(`[publish] 🔧 Último recurso: cat=${publishCatId} "${publishTitle.slice(0,40)}"`);
             const r4 = await addFixedPriceItem({
               title: publishTitle, description: publishDesc,
