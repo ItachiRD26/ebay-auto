@@ -192,45 +192,36 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             )}
           </div>
 
-          {/* Markup selector — only when editing */}
-          {showMarkupUI && editing && (
+          {/* Price editor — shown when editing */}
+          {editing && (
             <div style={{ background: "#0d0d14", borderRadius: 6, padding: "0.5rem 0.6rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
-                <span className="price-label">Markup</span>
-                <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-                  {[3, 6, 10, 15].map(p => (
-                    <button
-                      key={p}
-                      onClick={() => { setMarkupPct(p); saveMarkup(p); }}
-                      style={{
-                        padding: "1px 7px", borderRadius: 4, fontSize: "0.7rem", fontWeight: 600,
-                        cursor: "pointer", border: "1px solid",
-                        background: markupPct === p ? "#3b82f6" : "transparent",
-                        color: markupPct === p ? "#fff" : "#64748b",
-                        borderColor: markupPct === p ? "#3b82f6" : "#2d3748",
-                      }}
-                    >
-                      {p}%
-                    </button>
-                  ))}
-                  <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="price-label">{isVariation ? "Markup %" : "Tu precio"}</span>
+                {isVariation ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <input
                       type="number" min={0} max={100} value={markupPct}
                       onChange={e => setMarkupPct(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
                       onBlur={() => saveMarkup(markupPct)}
-                      style={{ width: 40, background: "#0d0d14", border: "1px solid #2d3748", borderRadius: 4, color: "#e2e8f0", fontSize: "0.78rem", padding: "1px 4px", textAlign: "right", outline: "none" }}
+                      style={{ width: 50, background: "#0d0d14", border: "1px solid #2d3748", borderRadius: 4, color: "#e2e8f0", fontSize: "0.85rem", padding: "2px 6px", textAlign: "right", outline: "none" }}
                     />
-                    <span style={{ fontSize: "0.72rem", color: "#64748b" }}>%</span>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b" }}>%</span>
                   </div>
-                </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ fontSize: "0.8rem", color: "#64748b" }}>$</span>
+                    <input
+                      type="number" min={0} step={0.01} value={price}
+                      onChange={e => setPrice(e.target.value)}
+                      onBlur={() => {
+                        const v = parseFloat(price);
+                        if (!isNaN(v) && v > 0) onUpdate({ suggestedSellingPrice: v });
+                      }}
+                      style={{ width: 70, background: "#0d0d14", border: "1px solid #2d3748", borderRadius: 4, color: "#e2e8f0", fontSize: "0.85rem", padding: "2px 6px", textAlign: "right", outline: "none" }}
+                    />
+                  </div>
+                )}
               </div>
-              <input
-                type="range" min={0} max={50} step={1} value={markupPct}
-                onChange={e => setMarkupPct(parseInt(e.target.value))}
-                onMouseUp={() => saveMarkup(markupPct)}
-                onTouchEnd={() => saveMarkup(markupPct)}
-                style={{ width: "100%", accentColor: "#3b82f6", cursor: "pointer" }}
-              />
             </div>
           )}
 
