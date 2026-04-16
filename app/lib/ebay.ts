@@ -85,29 +85,37 @@ export async function getUserToken(storeId: string): Promise<string> {
 }
 
 // ─── Browse API: Keyword Search ───────────────────────────────────────────────
-// Sort orders eBay supports — we rotate to explore different result pages
+// Sort orders eBay supports — 5 options give access to different ranking slices
 const SORT_ORDERS = ["bestMatch", "newlyListed", "price", "-price", "distance"] as const;
-
-// Track last-used sort+offset per keyword to avoid repeat results
-const _searchState = new Map<string, { sortIdx: number; offset: number }>(); // keyed by 'userId:keyword'
 
 export async function searchProducts(keywords: string, limit = 200, userId = "default") {
   const token = await getAppToken();
 
-  // Get or init rotation state for this keyword
-  const key = `${userId}:${keywords.toLowerCase().trim()}`;
-  const prev = _searchState.get(key) ?? { sortIdx: 0, offset: 0 };
+  // ── Stateless sort+offset derivation ─────────────────────────────────────
+  // No in-memory Map needed — derived purely from inputs so it survives server
+  // restarts, scales across serverless instances, and never gets stale.
+  //
+  // kwHash:   different keywords → different sort orders in the SAME session
+  //           e.g. "portable fan" uses price sort while "yoga mat" uses newlyListed
+  //
+  // timeSlot: 1-hour bucket — rotates sort+offset every hour so repeated sessions
+  //           pick up fresh results automatically (no manual reset needed)
+  //
+  // userHash: different users get different result sets for the same keyword
+  //           prevents two users from always scanning the same 200 items
+  //
+  // After 5 hours: full sort rotation complete, offset bumps by 200
+  // After 25 hours: second offset bucket (offset=200), full 1000-item coverage in 5 days
+  const kwHash   = [...keywords.toLowerCase().trim()].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const userHash = [...userId].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const timeSlot = Math.floor(Date.now() / (60 * 60 * 1000)); // 1-hour bucket
+  const combined = kwHash + userHash + timeSlot;
 
-  // Advance: cycle through sort orders, then bump offset
-  let { sortIdx, offset } = prev;
-  const sort = SORT_ORDERS[sortIdx % SORT_ORDERS.length];
+  const sort         = SORT_ORDERS[combined % SORT_ORDERS.length];
+  const offsetBucket = Math.floor(combined / SORT_ORDERS.length) % 5;
+  const offset       = offsetBucket * 200;
 
-  // Move to next sort on next call — after all sorts tried, bump offset by 200
-  const nextSortIdx = (sortIdx + 1) % SORT_ORDERS.length;
-  const nextOffset  = nextSortIdx === 0 ? (offset + 200) % 1000 : offset;
-  _searchState.set(key, { sortIdx: nextSortIdx, offset: nextOffset });
-
-  console.log(`[search] "${key}" sort=${sort} offset=${offset}`);
+  console.log(`[search] "${keywords.trim()}" user=${userId.slice(0,6)} sort=${sort} offset=${offset}`);
 
   const params = new URLSearchParams({
     q: keywords,

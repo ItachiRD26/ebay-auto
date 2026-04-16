@@ -222,6 +222,10 @@ async function addFixedPriceItem(product: {
   // aspects from pet categories). We never filter valid aspects away.
   const categoryType = product.categoryType ?? CATEGORY_TYPES[product.categoryId] ?? detectTypeFromTitle(product.title);
   const aspects = cleanAndSupplementAspects(product.aspects, product.title, categoryType);
+  // Safety net — Brand and MPN are required by eBay for virtually all categories.
+  // cleanAndSupplementAspects already sets these, but guard against any edge case.
+  if (!aspects["Brand"] || aspects["Brand"].length === 0) aspects["Brand"] = ["Unbranded"];
+  if (!aspects["MPN"]   || aspects["MPN"].length === 0)   aspects["MPN"]   = ["Does Not Apply"];
 
   const picturesXml = product.images.slice(0, 12).map(url => `<PictureURL>${escXml(url)}</PictureURL>`).join("");
   const conditionId = ({"New":"1000","New with tags":"1000","New with box":"1000","New without tags":"1500","Like New":"2500","Used":"3000"} as Record<string,string>)[product.condition] ?? "1000";
@@ -613,14 +617,53 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
     const msg1 = String(err1 instanceof Error ? err1.message : err1);
     console.log(`[publish] ⚠️ Attempt 1 failed: ${msg1.slice(0, 120)}`);
 
-    // Only retry if eBay says "improper words" or "category" error
+    // Classify the error to pick the right retry strategy
     const isImproper    = msg1.includes("improper") || msg1.includes("policy") || msg1.includes("violation");
     const isCategoryErr = msg1.includes("category") || msg1.includes("leaf") || msg1.includes("not a valid") || msg1.includes("not valid");
+    // "missing required item specific" → autoFixWithClaude adds the missing aspect and retries
+    const isMissing     = msg1.includes("missing") || (msg1.includes("item specific") && !isImproper);
 
-    if (!isImproper && !isCategoryErr) {
+    if (!isImproper && !isCategoryErr && !isMissing) {
       await docRef.update({ status: "failed", failReason: msg1.slice(0, 500), updatedAt: Date.now() });
       throw err1;
     }
+
+    // ── Missing item specific: Claude adds it, retry immediately ──────────────
+    if (isMissing && !isImproper && !isCategoryErr) {
+      console.log(`[publish] 🔧 Missing item specific — Claude fixing aspects: ${msg1.slice(0, 80)}`);
+      const fix = await autoFixWithClaude(msg1, {
+        title: publishTitle, description: publishDesc,
+        categoryId: refCategoryId, aspects: publishAspects,
+      });
+      if (fix?.aspects) {
+        Object.assign(publishAspects, fix.aspects);
+        console.log(`[publish] 🔧 Added aspects: ${JSON.stringify(fix.aspects)}`);
+      }
+      // Safety net: Brand and MPN are always required — force them
+      if (!publishAspects["Brand"]?.length) publishAspects["Brand"] = ["Unbranded"];
+      publishAspects["MPN"] = ["Does Not Apply"];
+      try {
+        const resultMissing = await addFixedPriceItem({
+          title: publishTitle, description: publishDesc,
+          categoryId: refCategoryId, price: product.suggestedSellingPrice,
+          stock: (product.stock ?? 10), images: refImages,
+          condition: product.condition ?? "New", aspects: publishAspects,
+          variations: refVariations, markupRatio,
+          fulfillmentPolicyId: policies.fulfillmentPolicyId,
+          paymentPolicyId:     policies.paymentPolicyId,
+          returnPolicyId:      policies.returnPolicyId,
+          itemCountry:         policies.itemCountry,
+          itemLocation:        policies.itemLocation,
+        }, userToken);
+        itemId = resultMissing.itemId;
+        console.log(`[publish] ✅ Publicado tras corregir aspects faltantes — ID: ${itemId}`);
+      } catch (missingErr: unknown) {
+        const missingMsg = String(missingErr instanceof Error ? missingErr.message : missingErr);
+        console.log(`[publish] ❌ Missing-fix attempt failed: ${missingMsg.slice(0, 120)}`);
+        await docRef.update({ status: "failed", failReason: missingMsg.slice(0, 500), updatedAt: Date.now() });
+        throw missingErr;
+      }
+    } else {
 
     // ── Category error: fix category, then retry immediately (no title rewrite needed) ──
     if (isCategoryErr && !isImproper) {
@@ -753,6 +796,7 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
       throw new Error(failReason);
     }
     } // end else (improper)
+    } // end else (isMissing)
   } // end catch (err1)
 
   // ── Step 6: Success — update Firestore ───────────────────────────────────
