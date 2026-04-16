@@ -1,4 +1,4 @@
-// In-memory search progress — shared across the search route
+// In-memory search progress — keyed by userId to prevent cross-user state leakage
 export interface SearchProgress {
   active:    boolean;
   keyword:   string;
@@ -20,34 +20,43 @@ export interface SearchProgress {
 
 const EMPTY_SKIPS = { price: 0, banned: 0, country: 0, sales: 0, duplicate: 0, condition: 0 };
 
-let progress: SearchProgress = {
+const EMPTY_PROGRESS = (): SearchProgress => ({
   active: false, keyword: "", reviewed: 0,
   passed: 0, published: 0, failed: 0,
   keywords: { done: 0, total: 0 },
   skipReasons: { ...EMPTY_SKIPS },
   lastSkipReason: "",
-};
+});
 
-export function getSearchProgress() { return { ...progress }; }
+// Per-user progress map — prevents user A's search from overwriting user B's
+const _progressMap = new Map<string, SearchProgress>();
 
-export function resetProgress(totalKeywords: number) {
-  progress = {
+export function getSearchProgress(userId: string) {
+  return { ...(_progressMap.get(userId) ?? EMPTY_PROGRESS()) };
+}
+
+export function resetProgress(userId: string, totalKeywords: number) {
+  _progressMap.set(userId, {
     active: true, keyword: "", reviewed: 0, passed: 0, published: 0, failed: 0,
     keywords: { done: 0, total: totalKeywords },
     skipReasons: { ...EMPTY_SKIPS },
     lastSkipReason: "",
-  };
+  });
 }
 
-export function updateProgress(patch: Partial<SearchProgress>) {
-  progress = { ...progress, ...patch };
+export function updateProgress(userId: string, patch: Partial<SearchProgress>) {
+  const current = _progressMap.get(userId) ?? EMPTY_PROGRESS();
+  _progressMap.set(userId, { ...current, ...patch });
 }
 
-export function skipProgress(reason: keyof typeof EMPTY_SKIPS, detail?: string) {
-  progress.skipReasons[reason]++;
-  if (detail) progress.lastSkipReason = detail;
+export function skipProgress(userId: string, reason: keyof typeof EMPTY_SKIPS, detail?: string) {
+  const current = _progressMap.get(userId) ?? EMPTY_PROGRESS();
+  current.skipReasons[reason]++;
+  if (detail) current.lastSkipReason = detail;
+  _progressMap.set(userId, current);
 }
 
-export function endProgress() {
-  progress = { ...progress, active: false };
+export function endProgress(userId: string) {
+  const current = _progressMap.get(userId) ?? EMPTY_PROGRESS();
+  _progressMap.set(userId, { ...current, active: false });
 }

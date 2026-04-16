@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { QueueProduct } from "@/types";
 
 interface Props {
@@ -38,6 +38,18 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
 
   const defaultMarkup = product.markupPercent ?? 6;
   const [markupPct, setMarkupPct] = useState<number>(defaultMarkup);
+
+  // Sync local state when product prop changes from outside (Firestore real-time updates)
+  // Only sync when not actively editing to avoid interrupting user input
+  useEffect(() => {
+    if (!editing) {
+      setPrice((product.suggestedSellingPrice ?? 0).toString());
+      setMarkupPct(product.markupPercent ?? 6);
+      setDescription(product.description ?? "");
+      setStock(product.stock?.toString() ?? "10");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product.suggestedSellingPrice, product.markupPercent, product.description, product.stock]);
 
   // Live preview prices based on current slider value
   const myMinPrice = +((refMin || product.totalMarketCost || 0) * (1 + markupPct / 100)).toFixed(2);
@@ -178,7 +190,8 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             <div className="price-item">
               <span className="price-label">{isVariation ? "Tu rango" : "Tu precio"}</span>
               <span className="price-value sell">
-                ${myMinPrice.toFixed(2)}
+                {/* Variations: markup-calculated range. Single items: actual saved price */}
+                ${(isVariation ? myMinPrice : (product.suggestedSellingPrice ?? myMinPrice)).toFixed(2)}
                 {isVariation && myMaxPrice !== myMinPrice && (
                   <span style={{ fontSize: "0.8rem" }}> – ${myMaxPrice.toFixed(2)}</span>
                 )}

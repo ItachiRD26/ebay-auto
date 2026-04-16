@@ -41,7 +41,7 @@ export const DEFAULT_SETTINGS = {
   minSold30d: 3,
   maxVariations: 12,
   minMarginPercent: 30,
-  defaultStock: 1,
+  defaultStock: 10,  // sensible default — shows availability without over-committing
   ebayMarketplace: "EBAY_US",
   autoSearchEnabled: false,
   searchIntervalMinutes: 60,

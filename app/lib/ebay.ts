@@ -89,13 +89,13 @@ export async function getUserToken(storeId: string): Promise<string> {
 const SORT_ORDERS = ["bestMatch", "newlyListed", "price", "-price", "distance"] as const;
 
 // Track last-used sort+offset per keyword to avoid repeat results
-const _searchState = new Map<string, { sortIdx: number; offset: number }>();
+const _searchState = new Map<string, { sortIdx: number; offset: number }>(); // keyed by 'userId:keyword'
 
-export async function searchProducts(keywords: string, limit = 200) {
+export async function searchProducts(keywords: string, limit = 200, userId = "default") {
   const token = await getAppToken();
 
   // Get or init rotation state for this keyword
-  const key = keywords.toLowerCase().trim();
+  const key = `${userId}:${keywords.toLowerCase().trim()}`;
   const prev = _searchState.get(key) ?? { sortIdx: 0, offset: 0 };
 
   // Advance: cycle through sort orders, then bump offset

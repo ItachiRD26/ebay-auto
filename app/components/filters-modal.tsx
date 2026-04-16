@@ -8,7 +8,7 @@ import { useAuth } from "@/lib/auth-context";
 
 const DEFAULTS: Settings = {
   minPrice: 15, maxPrice: 150, markupPercent: 6, minSoldCount: 5,
-  minSold30d: 3, maxVariations: 12, minMarginPercent: 30, defaultStock: 1,
+  minSold30d: 3, maxVariations: 12, minMarginPercent: 30, defaultStock: 10,
   ebayMarketplace: "EBAY_US", autoSearchEnabled: false,
   searchIntervalMinutes: 60, searchKeywords: [],
   onlyFreeShipping: false, onlyNewCondition: true,

@@ -252,7 +252,7 @@ export default function Dashboard() {
     if (!searching) { setSearchProgress(null); return; }
     const interval = setInterval(async () => {
       try {
-        const res  = await fetch("/api/ebay/search-status");
+        const res  = await fetch(`/api/ebay/search-status?userId=${uid}`);
         const data = await res.json();
         if (data.active) {
           setSearchProgress(p => p ? {

@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
     const {
       minPrice         = 20,
       maxPrice         = 500,
-      defaultStock     = 1,
+      defaultStock     = 10,
       onlyNewCondition = false,
     } = settings;
     const markupPercent = 6; // fixed 6% to cover eBay fees
@@ -184,7 +184,9 @@ export async function POST(req: NextRequest) {
       filterLog: [] as string[],  // full detail of each filtered item
     };
 
-    const batch = db.batch();
+    // Batch writes in chunks of 400 to stay under Firestore's 500-op limit
+    let batch = db.batch();
+    let batchOps = 0;
 
     for (const url of urls) {
       try {
@@ -310,7 +312,14 @@ export async function POST(req: NextRequest) {
 
         const ref = queueCol(userId).doc();
         batch.set(ref, product);
+        batchOps++;
         results.added++;
+        // Flush batch every 400 ops
+        if (batchOps >= 400) {
+          if (batchOps > 0) await batch.commit(); // flush remaining
+          batch = db.batch();
+          batchOps = 0;
+        }
         console.log(`[import] ✅ AGREGADO: "${title.slice(0,50)}" $${price} → sugerido $${suggestedSellingPrice}`);
 
         await new Promise((r) => setTimeout(r, 200));
@@ -323,7 +332,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    await batch.commit();
+    if (batchOps > 0) await batch.commit(); // flush remaining
 
     // Return full detail so the UI can show exactly what happened
     return NextResponse.json({

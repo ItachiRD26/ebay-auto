@@ -21,7 +21,7 @@ import { DEFAULT_AUTO_KEYWORDS, DEFAULT_EXCLUDED_KEYWORDS } from "@/api/ebay/key
 import { queueCol, settingsDoc, seenCol } from "@/lib/firebase";
 
 // 60-second in-memory cache so we don't hit Firestore on every item
-let _kwCache: { auto: string[]; excluded: string[]; fetchedAt: number } | null = null;
+const _kwCache = new Map<string, { auto: string[]; excluded: string[]; fetchedAt: number }>();
 
 async function getUserSettings(userId: string): Promise<{ minSoldCount: number; minSold30d: number; defaultStock: number }> {
   try {
@@ -36,19 +36,23 @@ async function getUserSettings(userId: string): Promise<{ minSoldCount: number; 
 }
 
 async function getKeywords(userId: string): Promise<{ auto: string[]; excluded: string[] }> {
-  if (_kwCache && Date.now() - _kwCache.fetchedAt < 60_000) return _kwCache;
+  const cached = _kwCache.get(userId);
+  if (cached && Date.now() - cached.fetchedAt < 60_000) return cached;
   try {
     const snap = await settingsDoc(userId, "keywords").get();
     const data = snap.exists ? snap.data() : {};
-    _kwCache = {
+    const entry = {
       auto:     data?.autoKeywords?.length     ? data.autoKeywords     : DEFAULT_AUTO_KEYWORDS,
       excluded: data?.excludedKeywords?.length ? data.excludedKeywords : DEFAULT_EXCLUDED_KEYWORDS,
       fetchedAt: Date.now(),
     };
+    _kwCache.set(userId, entry);
+    return entry;
   } catch {
-    _kwCache = { auto: DEFAULT_AUTO_KEYWORDS, excluded: DEFAULT_EXCLUDED_KEYWORDS, fetchedAt: Date.now() };
+    const fallback = { auto: DEFAULT_AUTO_KEYWORDS, excluded: DEFAULT_EXCLUDED_KEYWORDS, fetchedAt: Date.now() };
+    _kwCache.set(userId, fallback);
+    return fallback;
   }
-  return _kwCache;
 }
 
 function isBannedWith(title: string, excluded: string[]): boolean {
@@ -359,18 +363,18 @@ async function processItem(
   const pricing = calcPricing(item);
 
   if (pricing.ebayRefPrice < CONFIG.MIN_PRICE || pricing.ebayRefPrice > CONFIG.MAX_PRICE) {
-    skipProgress("price", `$${pricing.ebayRefPrice}`);
+    skipProgress(userId, "price", `$${pricing.ebayRefPrice}`);
     return false;
   }
   if (isBannedWith(title, excluded)) {
-    skipProgress("banned", title.slice(0, 40));
+    skipProgress(userId, "banned", title.slice(0, 40));
     return false;
   }
 
   // ── 2. China origin check (Browse API summary) ──────────────────────────────
   const summaryCountry = (item.itemLocation as { country?: string })?.country ?? "";
   if (notChina(summaryCountry)) {
-    skipProgress("country", summaryCountry);
+    skipProgress(userId, "country", summaryCountry);
     return false;
   }
 
@@ -378,7 +382,7 @@ async function processItem(
   // Skip if condition is clearly not new
   const conditionId = (item.conditionId as string) ?? "";
   if (conditionId && !["1000","1500"].includes(conditionId)) {
-    skipProgress("condition", conditionId);
+    skipProgress(userId, "condition", conditionId);
     return false;
   }
 
@@ -387,7 +391,7 @@ async function processItem(
 
   // Confirm China origin via Trading API
   if (notChina(td.shipFromCountry)) {
-    skipProgress("country", td.shipFromCountry ?? "?");
+    skipProgress(userId, "country", td.shipFromCountry ?? "?");
     return false;
   }
 
@@ -401,12 +405,12 @@ async function processItem(
   console.log(`      Ventas: ${td.soldCount} total | ~${td.estimatedSold30d} est/30d | listing: ${ageLabel} | ID:${numericId}`);
 
   if (td.soldCount < minSoldTotal) {
-    skipProgress("sales", `${td.soldCount} sold < ${minSoldTotal} min`);
+    skipProgress(userId, "sales", `${td.soldCount} sold < ${minSoldTotal} min`);
     return false;
   }
 
   if (td.estimatedSold30d < minSold30d) {
-    skipProgress("sales", `~${td.estimatedSold30d}/30d < ${minSold30d} min`);
+    skipProgress(userId, "sales", `~${td.estimatedSold30d}/30d < ${minSold30d} min`);
     return false;
   }
 
@@ -416,20 +420,20 @@ async function processItem(
   // Check seen_items (light collection — survives product deletion)
   const seenDoc = await seenCol(userId).doc(numericId).get();
   if (seenDoc.exists) {
-    skipProgress("duplicate");
+    skipProgress(userId, "duplicate");
     return false;
   }
 
   // Fallback: also check queue (for items added before seen_items existed)
   const dup = await queueCol(userId).where("ebayItemId", "==", numericId).limit(1).get();
   if (!dup.empty) {
-    skipProgress("duplicate");
+    skipProgress(userId, "duplicate");
     return false;
   }
 
   const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
   if (!titleDup.empty) {
-    skipProgress("duplicate");
+    skipProgress(userId, "duplicate");
     return false;
   }
 
@@ -515,7 +519,7 @@ export async function POST(req: NextRequest) {
     console.log(`\n🔍 Búsqueda: "${kw}"`);
     let result: { itemSummaries?: unknown[] };
     try {
-      result = await searchProducts(kw, CONFIG.ITEMS_PER_SEARCH);
+      result = await searchProducts(kw, CONFIG.ITEMS_PER_SEARCH, userId);
     } catch (searchErr) {
       const msg = searchErr instanceof Error ? searchErr.message : String(searchErr);
       console.warn(`[search] ⚠️ Failed "${kw}":`, msg);
@@ -528,8 +532,8 @@ export async function POST(req: NextRequest) {
     let totalSkipped = 0;
 
     // Reset server-side progress so the polling endpoint shows live data
-    resetProgress(items.length);
-    updateProgress({ keyword: kw });
+    resetProgress(userId, items.length);
+    updateProgress(userId, { keyword: kw });
 
     for (const item of items) {
       totalReviewed++;
@@ -540,11 +544,11 @@ export async function POST(req: NextRequest) {
         totalSkipped++;
       }
       // Update server-side progress after every item — frontend polls this
-      updateProgress({ reviewed: totalReviewed, passed: totalAdded });
+      updateProgress(userId, { reviewed: totalReviewed, passed: totalAdded });
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    endProgress();
+    endProgress(userId);
 
     return NextResponse.json({ success: true, added: totalAdded, published: 0, reviewed: totalReviewed, skipped: totalSkipped });
 

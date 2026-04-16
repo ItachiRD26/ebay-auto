@@ -9,7 +9,7 @@ const CONFIG = {
   MIN_PRICE:      15,    // only filter: >= $15
   MIN_SOLD:       3,     // only filter: >= 3 lifetime sales
   MARKUP_PERCENT: 6,
-  STOCK:          1,
+  STOCK:          10,  // fallback — overridden by user defaultStock setting
   MAX_ITEMS:      50_000, // scan up to 50k unique items across all queries
   MAX_PAGES:      50,    // kept for reference (not used directly in multi-query scanner)
 };
@@ -253,6 +253,7 @@ export async function POST(req: NextRequest) {
     ]);
     const settings    = (settingsSnap.exists ? settingsSnap.data() : DEFAULT_SETTINGS) as Settings;
     const markupPct   = settings.markupPercent ?? CONFIG.MARKUP_PERCENT;
+    const defaultStock = (settings as unknown as Record<string,number>)?.defaultStock ?? CONFIG.STOCK;
     // Single filter: min price $15. No sold filter — unitSoldCount from Browse API
     // is unreliable (often 0/undefined even for items with real sales).
     // User reviews everything in the pending queue.
@@ -331,7 +332,7 @@ export async function POST(req: NextRequest) {
         listingAgeDays: Math.round(listingAgeDays),
         condition: item.condition || "New",
         sourceUrl: `https://www.ebay.com/itm/${item.itemId}`,
-        description: "", stock: CONFIG.STOCK, status: importStatus,
+        description: "", stock: defaultStock, status: importStatus,
         createdAt: Date.now(), updatedAt: Date.now(),
       };
 
