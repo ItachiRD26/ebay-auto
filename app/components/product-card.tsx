@@ -25,6 +25,22 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   const [delisting, setDelisting] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
   const [showForceModal, setShowForceModal] = useState(false);
+  const [generatingDesc, setGeneratingDesc] = useState(false);
+
+  const generateDescription = async (titleToUse?: string) => {
+    setGeneratingDesc(true);
+    try {
+      const res = await fetch("/api/ebay/generate-desc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: titleToUse ?? editTitle ?? product.title }),
+      });
+      const data = await res.json();
+      if (data.description) setDescription(data.description);
+    } catch { /* silent fail */ } finally {
+      setGeneratingDesc(false);
+    }
+  };
 
   // ── Pricing ───────────────────────────────────────────────────────────────
   // isVariation: has a REAL price range from GetItem (refPriceMax > refPriceMin)
@@ -255,7 +271,13 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
         {/* Edit form (non-failed) */}
         {editing && (
           <div className="desc-wrap">
-            <label className="field-label">Descripción</label>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+              <label className="field-label" style={{ margin: 0 }}>Descripción</label>
+              <button onClick={() => generateDescription()} disabled={generatingDesc}
+                style={{ background: "linear-gradient(135deg, #6366f1, #4f46e5)", border: "none", borderRadius: 5, color: "#fff", fontSize: "0.65rem", fontWeight: 600, padding: "2px 8px", cursor: generatingDesc ? "not-allowed" : "pointer", opacity: generatingDesc ? 0.7 : 1 }}>
+                {generatingDesc ? "⏳" : "✨ IA"}
+              </button>
+            </div>
             <textarea className="desc-input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Short product description..." rows={3} />
             <div style={{ marginTop: "0.5rem" }}>
               <label className="field-label">Stock</label>
@@ -463,9 +485,15 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
 
                 {/* Description */}
                 <div>
-                  <label className="field-label" style={{ color: isImproper ? "#f97316" : undefined }}>
-                    {isImproper ? "Descripción (revisa por palabras problemáticas)" : "Descripción"}
-                  </label>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                    <label className="field-label" style={{ color: isImproper ? "#f97316" : undefined, margin: 0 }}>
+                      {isImproper ? "Descripción (revisa por palabras problemáticas)" : "Descripción"}
+                    </label>
+                    <button onClick={() => generateDescription(editTitle || product.title)} disabled={generatingDesc}
+                      style={{ background: "linear-gradient(135deg, #6366f1, #4f46e5)", border: "none", borderRadius: 5, color: "#fff", fontSize: "0.65rem", fontWeight: 600, padding: "2px 8px", cursor: generatingDesc ? "not-allowed" : "pointer", opacity: generatingDesc ? 0.7 : 1 }}>
+                      {generatingDesc ? "⏳ Generando..." : "✨ Generar con IA"}
+                    </button>
+                  </div>
                   <textarea className="desc-input" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="Descripción del producto..." style={{ borderColor: isImproper ? "#f9741333" : undefined }} />
                 </div>
 
