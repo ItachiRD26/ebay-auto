@@ -133,6 +133,63 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   };
 
 
+  // ── Direct save+publish for failed products — no modal ──────────────────
+  // Saves ALL fields in ONE batch PATCH then publishes directly using product.storeId
+  // Does NOT open the publish modal (which would override edits and require extra click)
+  const handleSaveAndPublishFailed = async () => {
+    setPublishing(true);
+    try {
+      const sellingPriceVal = parseFloat(price) || product.suggestedSellingPrice;
+      const stockVal = parseInt(stock) || product.stock || 10;
+      const base = refMin || product.totalMarketCost || 0;
+      const newMarkup = base > 0 ? Math.round(((sellingPriceVal / base) - 1) * 100) : (product.markupPercent ?? 6);
+
+      // One single PATCH with all fields — avoids race conditions from multiple calls
+      const updates: Record<string, unknown> = {
+        status:                "approved",   // reset so publish flow works
+        failReason:            null,
+        title:                 (editTitle || product.title).slice(0, 80),
+        description,
+        suggestedSellingPrice: sellingPriceVal,
+        markupPercent:         newMarkup,
+        stock:                 stockVal,
+      };
+      if (editCategoryId && editCategoryId !== product.categoryId) {
+        updates.categoryId = editCategoryId;
+      }
+
+      // Save
+      await fetch("/api/ebay/queue", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: product.id, updates, userId: product.userId }),
+      });
+
+      // Short wait for Firestore to settle before publish reads it
+      await new Promise(r => setTimeout(r, 250));
+
+      // Publish directly — no modal
+      const res = await fetch("/api/ebay/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: product.id,
+          storeId:   product.storeId ?? "",
+          userId:    product.userId ?? "",
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        // Firestore listener will update the card with new failReason
+        console.error("[card] Publish failed:", data.error);
+      }
+    } catch (e) {
+      console.error("[card] Save+publish failed:", e);
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   const saveMarkup = (pct: number) => {
     const base = refMin || product.totalMarketCost || product.ebayReferencePrice || 0;
     onUpdate({
@@ -505,14 +562,25 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       ⚡ List anyway
                     </button>
                   ) : (
-                    <button className="btn btn-save" onClick={handleSave} style={{ flex: "0 0 auto", padding: "0.55rem 0.9rem" }}>💾 Guardar</button>
+                    // 💾 Guardar solo — guarda los edits sin publicar
+                    <button className="btn btn-save" onClick={async () => {
+                      const updates: Record<string, unknown> = {
+                        title: (editTitle || product.title).slice(0, 80),
+                        description,
+                        suggestedSellingPrice: parseFloat(price) || product.suggestedSellingPrice,
+                        stock: parseInt(stock) || product.stock || 10,
+                      };
+                      if (editCategoryId && editCategoryId !== product.categoryId) updates.categoryId = editCategoryId;
+                      onUpdate(updates as Parameters<typeof onUpdate>[0]);
+                    }} style={{ flex: "0 0 auto", padding: "0.55rem 0.9rem" }}>💾 Guardar</button>
                   )}
-                  <button className="btn btn-publish" onClick={() => { handleSave(); handlePublish(); }} disabled={publishing} style={{ flex: 1, fontSize: "0.8rem" }}>
+                  {/* 🚀 Guardar & Publicar — NO abre modal, publica directo */}
+                  <button className="btn btn-publish" onClick={handleSaveAndPublishFailed} disabled={publishing} style={{ flex: 1, fontSize: "0.8rem" }}>
                     {publishing ? "⏳ Publicando..." : "🚀 Guardar & Publicar"}
                   </button>
                 </div>
 
-                {/* Quick retry without editing */}
+                {/* Quick retry without editing — solo si no es error de contenido/categoría */}
                 {!isImproper && !isCategory && (
                   <button onClick={handlePublish} disabled={publishing}
                     style={{ background: "transparent", border: "1px solid #1e2235", borderRadius: 6, color: "#64748b", fontSize: "0.72rem", padding: "0.3rem", cursor: "pointer" }}>
