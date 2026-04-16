@@ -305,37 +305,88 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             </div>
           )}
 
-          {product.status === "failed" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-              <p className="fail-reason">⚠️ {product.failReason ?? "Error desconocido"}</p>
-              <div style={{ display: "flex", gap: "0.4rem" }}>
-                <button className="btn btn-edit" onClick={() => setEditing(!editing)} style={{ flex: 1 }}>
-                  {editing ? "✕ Close" : "✏ Edit & retry"}
-                </button>
-                {(product as QueueProduct & { tooManyVariations?: boolean }).tooManyVariations && (
-                  <button
-                    onClick={() => setShowForceModal(true)}
-                    disabled={publishing}
-                    style={{ flexShrink: 0, padding: "0.5rem 0.85rem", background: "linear-gradient(135deg, #7c3aed, #6d28d9)", color: "#fff", border: "none", borderRadius: 7, fontWeight: 600, fontSize: "0.78rem", cursor: "pointer", whiteSpace: "nowrap" }}
-                  >
-                    ⚡ List anyway
-                  </button>
-                )}
+          {product.status === "failed" && (() => {
+            const reason = product.failReason ?? "";
+            const isImproper  = /improper|policy|violation|not be permitted/i.test(reason);
+            const isCategory  = /category|leaf|not a valid/i.test(reason);
+            const isMissing   = /missing|item specific/i.test(reason) && !isImproper;
+            const isLimit     = /límite mensual|monthly limit/i.test(reason);
+            const isVariation = (product as QueueProduct & { tooManyVariations?: boolean }).tooManyVariations;
+
+            const diagColor  = isImproper ? "#f97316" : isCategory ? "#a78bfa" : isMissing ? "#f59e0b" : isLimit ? "#60a5fa" : "#ef4444";
+            const diagLabel  = isImproper ? "🚫 Palabras / Permisos" : isCategory ? "📂 Categoría" : isMissing ? "📋 Aspect faltante" : isLimit ? "📊 Límite mensual" : "⚠️ Error eBay";
+            const diagTip    = isImproper
+              ? "Cambia la categoría a una menos restrictiva (ej. Home & Garden) o edita el título."
+              : isCategory
+              ? "La categoría actual no es válida. Selecciona una categoría diferente."
+              : isMissing
+              ? "Falta un item specific requerido. Reintenta — se agrega automáticamente."
+              : isLimit
+              ? "Alcanzaste el límite mensual de listings. Disponible el próximo mes."
+              : "Revisa el título y descripción, luego reintenta.";
+
+            return (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+
+              {/* ── Error diagnosis banner ── */}
+              <div style={{ background: "#0a0a14", border: `1px solid ${diagColor}33`, borderRadius: "8px 8px 0 0", padding: "0.6rem 0.75rem", borderBottom: "none" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.25rem" }}>
+                  <span style={{ fontSize: "0.7rem", fontWeight: 700, color: diagColor, textTransform: "uppercase", letterSpacing: "0.05em" }}>{diagLabel}</span>
+                  <button onClick={() => setShowRejectConfirm(true)} style={{ background: "none", border: "none", color: "#4a5568", cursor: "pointer", fontSize: "0.7rem", padding: "0 2px" }} title="Rechazar producto">✕ Reject</button>
+                </div>
+                <p style={{ fontSize: "0.73rem", color: "#94a3b8", margin: 0, lineHeight: 1.4 }}>{reason.slice(0, 120)}{reason.length > 120 ? "…" : ""}</p>
+                <p style={{ fontSize: "0.7rem", color: diagColor, margin: "0.3rem 0 0", opacity: 0.85 }}>💡 {diagTip}</p>
               </div>
 
-              {editing && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.75rem", background: "#080810", borderRadius: 8, border: "1px solid #1e2235" }}>
-                  <label className="field-label">Título (max 80 chars)</label>
+              {/* ── Edit form — always open for failed ── */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem", padding: "0.75rem", background: "#080810", borderRadius: "0 0 8px 8px", border: `1px solid ${diagColor}22`, borderTop: `1px solid #1e2235` }}>
+
+                {/* Title */}
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+                    <label className="field-label">Título</label>
+                    <span style={{ fontSize: "0.65rem", color: editTitle.length > 75 ? "#ef4444" : "#475569" }}>{editTitle.length}/80</span>
+                  </div>
                   <input
-                    className="stock-input" style={{ width: "100%", fontSize: "0.8rem" }}
+                    className="stock-input" style={{ width: "100%", fontSize: "0.8rem", boxSizing: "border-box", borderColor: isImproper ? "#f9741344" : "#2d3748" }}
                     value={editTitle} onChange={e => setEditTitle(e.target.value.slice(0, 80))}
                     placeholder="Listing title..."
                   />
-                  <div style={{ fontSize: "0.7rem", color: editTitle.length > 75 ? "#ef4444" : "#475569", textAlign: "right" }}>{editTitle.length}/80</div>
+                </div>
 
-                  <label className="field-label">Categoría</label>
-                  <select className="stock-input" style={{ width: "100%", fontSize: "0.78rem" }} value={editCategoryId} onChange={e => setEditCategoryId(e.target.value)}>
+                {/* Category — highlighted when category error */}
+                <div>
+                  <label className="field-label" style={{ color: isCategory || isImproper ? "#a78bfa" : undefined }}>
+                    {isCategory || isImproper ? "📂 Categoría (cambia esto)" : "Categoría"}
+                    {isCategory || isImproper ? <span style={{ color: "#64748b", fontSize: "0.65rem", fontWeight: 400 }}> · actual: {editCategoryId || product.categoryId}</span> : null}
+                  </label>
+                  <select className="stock-input" style={{ width: "100%", fontSize: "0.78rem", boxSizing: "border-box", borderColor: (isCategory || isImproper) ? "#a78bfa66" : "#2d3748" }} value={editCategoryId} onChange={e => setEditCategoryId(e.target.value)}>
                     <option value="">-- Seleccionar categoría --</option>
+                    <optgroup label="🏠 Home &amp; Garden ★ (sin restricciones)">
+                      <option value="20625">Kitchen, Dining &amp; Bar Storage</option>
+                      <option value="20686">Mugs &amp; Cups</option>
+                      <option value="20579">Water Bottles &amp; Hydration</option>
+                      <option value="20697">Lamps</option>
+                      <option value="20455">Throw Pillows</option>
+                      <option value="20460">Blankets &amp; Throws</option>
+                      <option value="20461">Bath Towels</option>
+                      <option value="20580">Area Rugs &amp; Mats</option>
+                      <option value="3815">Decorative Clocks</option>
+                      <option value="92074">Picture Frames</option>
+                      <option value="116656">Vases</option>
+                      <option value="37592">Household Cleaning Supplies</option>
+                      <option value="11700">Home &amp; Garden (general)</option>
+                    </optgroup>
+                    <optgroup label="🐾 Pet Supplies ★ (sin restricciones)">
+                      <option value="116381">Dog Collars &amp; Tags</option>
+                      <option value="66863">Dog Leashes</option>
+                      <option value="66864">Dog Harnesses</option>
+                      <option value="117426">Dog Beds</option>
+                      <option value="66783">Dog Toys</option>
+                      <option value="20748">Cat Collars &amp; Tags</option>
+                      <option value="20750">Cat Supplies</option>
+                      <option value="1281">Pet Supplies (general)</option>
+                    </optgroup>
                     <optgroup label="👟 Footwear — Men's">
                       <option value="45333">Men's Loafers &amp; Slip-Ons</option>
                       <option value="63867">Men's Slippers</option>
@@ -370,30 +421,9 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       <option value="63865">Women's Shorts</option>
                       <option value="63866">Women's Sweaters</option>
                     </optgroup>
-                    <optgroup label="🏠 Home &amp; Garden">
-                      <option value="20625">Kitchen, Dining &amp; Bar Storage</option>
-                      <option value="20686">Mugs &amp; Cups</option>
-                      <option value="20579">Water Bottles &amp; Hydration</option>
-                      <option value="20697">Lamps</option>
-                      <option value="20455">Throw Pillows</option>
-                      <option value="20460">Blankets &amp; Throws</option>
-                      <option value="20461">Bath Towels</option>
-                      <option value="20580">Area Rugs &amp; Mats</option>
-                      <option value="3815">Decorative Clocks</option>
-                      <option value="92074">Picture Frames</option>
-                      <option value="116656">Vases</option>
-                      <option value="37592">Household Cleaning Supplies</option>
-                      <option value="11700">Home &amp; Garden (general)</option>
-                    </optgroup>
-                    <optgroup label="🐾 Pet Supplies">
-                      <option value="116381">Dog Collars &amp; Tags</option>
-                      <option value="66863">Dog Leashes</option>
-                      <option value="66864">Dog Harnesses</option>
-                      <option value="117426">Dog Beds</option>
-                      <option value="66783">Dog Toys</option>
-                      <option value="20748">Cat Collars &amp; Tags</option>
-                      <option value="20750">Cat Supplies</option>
-                      <option value="1281">Pet Supplies (general)</option>
+                    <optgroup label="💪 Fitness">
+                      <option value="158902">Fitness Equipment</option>
+                      <option value="111844">Yoga &amp; Pilates</option>
                     </optgroup>
                     <optgroup label="🚗 Auto">
                       <option value="179690">Car Care</option>
@@ -403,10 +433,6 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       <option value="175759">Cell Phone Accessories</option>
                       <option value="58058">Laptop &amp; Desktop Accessories</option>
                       <option value="139762">Outlet Adapters &amp; Converters</option>
-                    </optgroup>
-                    <optgroup label="💪 Fitness">
-                      <option value="158902">Fitness Equipment</option>
-                      <option value="111844">Yoga &amp; Pilates</option>
                     </optgroup>
                     <optgroup label="✈️ Travel">
                       <option value="169291">Travel Accessories</option>
@@ -418,29 +444,57 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       <option value="11854">Health Care</option>
                     </optgroup>
                   </select>
+                </div>
 
-                  <label className="field-label">Descripción</label>
-                  <textarea className="desc-input" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="Descripción del producto..." />
-
-                  <label className="field-label">Tu precio ($)</label>
-                  <input className="stock-input" type="number" step="0.01" value={price} onChange={e => setPrice(e.target.value)} />
-
-                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
-                    <button className="btn btn-save" onClick={handleSave} style={{ flex: 1 }}>💾 Guardar cambios</button>
-                    <button className="btn btn-publish" onClick={() => { handleSave(); handlePublish(); }} disabled={publishing} style={{ flex: 1 }}>
-                      {publishing ? "Publishing..." : "🚀 Publish now"}
-                    </button>
+                {/* Price + Stock row */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+                  <div>
+                    <label className="field-label">Precio ($)</label>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ fontSize: "0.75rem", color: "#64748b" }}>$</span>
+                      <input className="stock-input" style={{ flex: 1, fontSize: "0.82rem" }} type="number" step="0.01" min="0" value={price} onChange={e => setPrice(e.target.value)} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="field-label">Stock</label>
+                    <input className="stock-input" style={{ width: "100%", fontSize: "0.82rem" }} type="number" min="1" value={stock} onChange={e => setStock(e.target.value)} />
                   </div>
                 </div>
-              )}
 
-              {!editing && (
-                <button className="btn btn-publish" onClick={handlePublish} disabled={publishing}>
-                  {publishing ? "Reintentando..." : "🔄 Retry without editing"}
-                </button>
-              )}
+                {/* Description */}
+                <div>
+                  <label className="field-label" style={{ color: isImproper ? "#f97316" : undefined }}>
+                    {isImproper ? "Descripción (revisa por palabras problemáticas)" : "Descripción"}
+                  </label>
+                  <textarea className="desc-input" value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="Descripción del producto..." style={{ borderColor: isImproper ? "#f9741333" : undefined }} />
+                </div>
+
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.1rem" }}>
+                  {isVariation ? (
+                    <button onClick={() => setShowForceModal(true)} disabled={publishing}
+                      style={{ flex: 1, padding: "0.55rem", background: "linear-gradient(135deg, #7c3aed, #6d28d9)", color: "#fff", border: "none", borderRadius: 7, fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
+                      ⚡ List anyway
+                    </button>
+                  ) : (
+                    <button className="btn btn-save" onClick={handleSave} style={{ flex: "0 0 auto", padding: "0.55rem 0.9rem" }}>💾 Guardar</button>
+                  )}
+                  <button className="btn btn-publish" onClick={() => { handleSave(); handlePublish(); }} disabled={publishing} style={{ flex: 1, fontSize: "0.8rem" }}>
+                    {publishing ? "⏳ Publicando..." : "🚀 Guardar & Publicar"}
+                  </button>
+                </div>
+
+                {/* Quick retry without editing */}
+                {!isImproper && !isCategory && (
+                  <button onClick={handlePublish} disabled={publishing}
+                    style={{ background: "transparent", border: "1px solid #1e2235", borderRadius: 6, color: "#64748b", fontSize: "0.72rem", padding: "0.3rem", cursor: "pointer" }}>
+                    🔄 Reintentar sin editar
+                  </button>
+                )}
+              </div>
             </div>
-          )}
+            );
+          })()}
         </div>
       </div>{/* end card-body */}
 
