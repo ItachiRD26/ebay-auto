@@ -12,7 +12,7 @@ const CONFIG = {
   EPROLO_SHIP_LOW:    7,
   EPROLO_SHIP_HIGH:   15,
   EPROLO_SHIP_AVG:    10,
-  STOCK:              1,
+  STOCK:              10,   // default — overridden by userSettings.defaultStock per-user
   ITEMS_PER_SEARCH:   200,   // Browse API max per request
 };
 
@@ -23,12 +23,16 @@ import { queueCol, settingsDoc, seenCol } from "@/lib/firebase";
 // 60-second in-memory cache so we don't hit Firestore on every item
 let _kwCache: { auto: string[]; excluded: string[]; fetchedAt: number } | null = null;
 
-async function getUserSettings(userId: string): Promise<{ minSoldCount: number; minSold30d: number }> {
+async function getUserSettings(userId: string): Promise<{ minSoldCount: number; minSold30d: number; defaultStock: number }> {
   try {
     const snap = await settingsDoc(userId, "main").get();
     const data = snap.data() as Record<string, number> | undefined;
-    return { minSoldCount: data?.minSoldCount ?? 5, minSold30d: data?.minSold30d ?? 3 };
-  } catch { return { minSoldCount: 5, minSold30d: 3 }; }
+    return {
+      minSoldCount:  data?.minSoldCount  ?? 5,
+      minSold30d:    data?.minSold30d    ?? 3,
+      defaultStock:  data?.defaultStock  ?? 10,
+    };
+  } catch { return { minSoldCount: 5, minSold30d: 3, defaultStock: 10 }; }
 }
 
 async function getKeywords(userId: string): Promise<{ auto: string[]; excluded: string[] }> {
@@ -342,6 +346,7 @@ async function processItem(
   excluded: string[],
   minSoldTotal: number,
   minSold30d: number,
+  defaultStock: number = 10,
 ): Promise<string | false> {
   const title      = (item.title as string) ?? "";
   const itemId     = item.itemId as string;
@@ -464,10 +469,10 @@ async function processItem(
     sourceUrl:             itemUrl,
     status:                "approved",
     description:           "",
-    stock:                 CONFIG.STOCK,
+    stock:                 defaultStock,
     createdAt:             Date.now(),
     updatedAt:             Date.now(),
-    expiresAt:             new Date(Date.now() + 24 * 60 * 60 * 1000),
+    expiresAt:             Date.now() + 24 * 60 * 60 * 1000 as unknown as Date, // stored as ms timestamp
   };
 
   const docRef = queueCol(userId).doc();
@@ -528,7 +533,7 @@ export async function POST(req: NextRequest) {
 
     for (const item of items) {
       totalReviewed++;
-      const productId = await processItem(item, kw, storeId, userId, kws.excluded, userSettings.minSoldCount, userSettings.minSold30d);
+      const productId = await processItem(item, kw, storeId, userId, kws.excluded, userSettings.minSoldCount, userSettings.minSold30d, userSettings.defaultStock);
       if (productId) {
         totalAdded++;
       } else {

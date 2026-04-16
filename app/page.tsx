@@ -343,7 +343,7 @@ export default function Dashboard() {
       const res = await fetch("/api/ebay/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "reject_all", status: targetStatus, userId: uid }),
+        body: JSON.stringify({ action: "reject_all", status: targetStatus, userId: uid, storeId: selectedStoreId }),
       });
       const data = await res.json();
       if (data.error) {

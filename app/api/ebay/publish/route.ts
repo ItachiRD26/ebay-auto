@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase";
+import { getUserToken } from "@/lib/ebay";
 import { publishProductById, markPublishFailed } from "@/lib/publish";
 
 export async function POST(req: NextRequest) {
@@ -9,9 +10,16 @@ export async function POST(req: NextRequest) {
     if (!storeId)   return NextResponse.json({ error: "storeId required" },   { status: 400 });
     if (!userId)    return NextResponse.json({ error: "userId required" },    { status: 400 });
 
+    // Check store exists
     const tokenDoc = await db.collection("tokens").doc(storeId).get();
     if (!tokenDoc.exists) return NextResponse.json({ error: `Tienda "${storeId}" no conectada. Ve a Mis Tiendas → Conectar.` }, { status: 401 });
-    const userToken = tokenDoc.data()!.access_token;
+    // Use getUserToken — auto-refreshes if expired (avoids silent auth failures)
+    let userToken: string;
+    try {
+      userToken = await getUserToken(storeId);
+    } catch {
+      return NextResponse.json({ error: "No se pudo obtener el token de eBay. Reconecta la tienda." }, { status: 401 });
+    }
 
     try {
       const { listingId } = await publishProductById(productId, userToken, userId, storeId, forceVariations);

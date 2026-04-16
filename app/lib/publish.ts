@@ -293,7 +293,7 @@ async function addFixedPriceItem(product: {
       // caused distortion when the user edited suggestedSellingPrice.
       const varPrice = v.refPrice > 0
         ? +Math.max(v.refPrice * markupRatio, 0.99).toFixed(2)
-        : +(product.price * markupRatio).toFixed(2);
+        : +product.price.toFixed(2);
       console.log(`[publish]   variant ${Object.values(v.specifics).join("/")} refPrice=$${v.refPrice} → $${varPrice}`);
       const varSpecificsXml = Object.entries(v.specifics).map(([name, val]) => `<NameValueList><Name>${escXml(name)}</Name><Value>${escXml(val)}</Value></NameValueList>`).join("");
       return `<Variation><SKU>${escXml(Object.values(v.specifics).map((x: unknown) => String(x)).join("-"))}</SKU><StartPrice>${varPrice}</StartPrice><Quantity>${product.stock}</Quantity><VariationSpecifics>${varSpecificsXml}</VariationSpecifics></Variation>`;
@@ -346,7 +346,7 @@ async function addFixedPriceItem(product: {
     <ListingType>FixedPriceItem</ListingType>
     <Location>${product.itemLocation ?? "Shenzhen"}</Location>
     ${!hasVariations ? `<Quantity>${product.stock}</Quantity>` : ""}
-    <PictureDetails>${picturesXml}</PictureDetails>
+    <PictureDetails><GalleryType>Gallery</GalleryType>${picturesXml}</PictureDetails>
     ${specificsXml ? `<ItemSpecifics>${specificsXml}</ItemSpecifics>` : ""}
     ${variationsXml}
     <SellerProfiles>
@@ -587,7 +587,7 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
     const result1 = await addFixedPriceItem({
       title: publishTitle, description: publishDesc,
       categoryId: refCategoryId, price: product.suggestedSellingPrice,
-      stock: Math.min(product.stock ?? 1, 1), images: refImages,
+      stock: (product.stock ?? 10), images: refImages,
       condition: product.condition ?? "New", aspects: publishAspects,
       variations: refVariations, markupRatio,
       fulfillmentPolicyId: policies.fulfillmentPolicyId,
@@ -625,7 +625,7 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
         const resultCat = await addFixedPriceItem({
           title: publishTitle, description: publishDesc,
           categoryId: refCategoryId, price: product.suggestedSellingPrice,
-          stock: Math.min(product.stock ?? 1, 1), images: refImages,
+          stock: (product.stock ?? 10), images: refImages,
           condition: product.condition ?? "New", aspects: publishAspects,
           variations: refVariations, markupRatio,
           fulfillmentPolicyId: policies.fulfillmentPolicyId,
@@ -653,7 +653,7 @@ Return ONLY JSON: {"title":"safe title max 80 chars","description":"2-3 factual 
             const result3 = await addFixedPriceItem({
               title: publishTitle, description: publishDesc,
               categoryId: refCategoryId, price: product.suggestedSellingPrice,
-              stock: Math.min(product.stock ?? 1, 1), images: refImages,
+              stock: (product.stock ?? 10), images: refImages,
               condition: product.condition ?? "New", aspects: publishAspects,
               variations: refVariations, markupRatio,
               fulfillmentPolicyId: policies.fulfillmentPolicyId,
@@ -719,7 +719,7 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
       const result2 = await addFixedPriceItem({
         title: publishTitle, description: publishDesc,
         categoryId: refCategoryId, price: product.suggestedSellingPrice,
-        stock: Math.min(product.stock ?? 1, 1), images: refImages,
+        stock: (product.stock ?? 10), images: refImages,
         condition: product.condition ?? "New", aspects: publishAspects,
         variations: refVariations, markupRatio,
         fulfillmentPolicyId: policies.fulfillmentPolicyId,

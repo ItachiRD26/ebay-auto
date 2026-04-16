@@ -215,7 +215,12 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       onChange={e => setPrice(e.target.value)}
                       onBlur={() => {
                         const v = parseFloat(price);
-                        if (!isNaN(v) && v > 0) onUpdate({ suggestedSellingPrice: v });
+                        if (!isNaN(v) && v > 0) {
+                          const base = refMin || product.totalMarketCost || 0;
+                          const newMarkup = base > 0 ? Math.round(((v / base) - 1) * 100) : (product.markupPercent ?? 6);
+                          setMarkupPct(newMarkup);
+                          onUpdate({ suggestedSellingPrice: v, markupPercent: newMarkup });
+                        }
                       }}
                       style={{ width: 70, background: "#0d0d14", border: "1px solid #2d3748", borderRadius: 4, color: "#e2e8f0", fontSize: "0.85rem", padding: "2px 6px", textAlign: "right", outline: "none" }}
                     />

@@ -7,7 +7,7 @@ export async function PATCH(req: NextRequest) {
     if (!productId || !updates) return NextResponse.json({ error: "productId and updates required" }, { status: 400 });
     if (!userId) return NextResponse.json({ error: "userId required" }, { status: 400 });
 
-    const allowed = ["status", "suggestedSellingPrice", "description", "stock", "eproloPrice", "eproloUrl", "margin", "marginPercent"];
+    const allowed = ["status", "suggestedSellingPrice", "markupPercent", "description", "stock", "eproloPrice", "eproloUrl", "margin", "marginPercent"];
     const safeUpdates: Record<string, unknown> = { updatedAt: Date.now() };
     for (const key of allowed) {
       if (key in updates) safeUpdates[key] = updates[key];
@@ -51,10 +51,11 @@ export async function POST(req: NextRequest) {
   // Bulk reject — rejects ALL products of a given status for a user.
   // Runs entirely server-side via Firestore query, not limited by frontend pagination.
   try {
-    const { action, status, userId } = await req.json() as {
+    const { action, status, userId, storeId } = await req.json() as {
       action: string;
       status: string;
       userId: string;
+      storeId?: string;
     };
 
     if (action !== "reject_all") return NextResponse.json({ error: "Unknown action" }, { status: 400 });
@@ -66,13 +67,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Cannot bulk-reject status "${status}"` }, { status: 400 });
     }
 
-    // Query ALL matching docs — no pagination limit
-    const snap = await queueCol(userId).where("status", "==", status).get();
+    // Query ALL matching docs for this store — server-side, no pagination limit
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let qRef: any = queueCol(userId).where("status", "==", status);
+    if (storeId) qRef = qRef.where("storeId", "==", storeId);
+    const snap = await qRef.get();
     if (snap.empty) return NextResponse.json({ success: true, rejected: 0 });
 
     // Firestore batch limit is 500 ops — chunk into batches
     const { db } = await import("@/lib/firebase");
-    const BATCH_SIZE = 400; // leave headroom (delete + seenCol set = 2 ops per item)
+    const BATCH_SIZE = 200; // 2 ops per item (set + delete) × 200 = 400, safely under Firestore 500-op limit
     const docs = snap.docs;
     let rejected = 0;
 
