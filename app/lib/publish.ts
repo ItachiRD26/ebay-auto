@@ -308,11 +308,21 @@ async function addFixedPriceItem(product: {
     variationsXml = `<Variations>${variationItems}${picturesBlockXml}<VariationSpecificsSet>${setXml}</VariationSpecificsSet></Variations>`;
   }
 
-  // Case-insensitive match — "color" and "Color" both excluded from ItemSpecifics
+  // Variation dimensions (Color, Size etc.) are excluded from ItemSpecifics — eBay
+  // requires them ONLY in <VariationSpecificsSet>, not duplicated in <ItemSpecifics>.
+  // Exception: non-dimension fields like Brand, MPN, Country of Origin always stay.
   const variationDimensions = hasVariations && varData
     ? new Set(Object.keys(varData.specificsSet).map(k => k.toLowerCase()))
     : new Set<string>();
-  const specificsXml = Object.entries(aspects).filter(([name]) => !variationDimensions.has(name.toLowerCase())).map(([name, values]) => values.map(v => `<NameValueList><Name>${escXml(name)}</Name><Value>${escXml(v)}</Value></NameValueList>`).join("")).join("");
+  // Fields that are never variation dimensions and must always be in ItemSpecifics
+  const ALWAYS_IN_SPECIFICS = new Set([
+    "brand", "mpn", "country/region of manufacture", "country of origin",
+    "upc", "ean", "isbn",
+  ]);
+  const specificsXml = Object.entries(aspects)
+    .filter(([name]) => ALWAYS_IN_SPECIFICS.has(name.toLowerCase()) || !variationDimensions.has(name.toLowerCase()))
+    .map(([name, values]) => values.map(v => `<NameValueList><n>${escXml(name)}</n><Value>${escXml(v)}</Value></NameValueList>`).join(""))
+    .join("");
   // ── Sanitize description per eBay Trading API rules ─────────────────────────
   const stripProblematic = (text: string): string =>
     text.replace(/<[^>]+>/g, " ").replace(/https?:\/\/\S+/gi, "").replace(/[^\x20-\x7E]/g, "")

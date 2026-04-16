@@ -865,6 +865,8 @@ export function buildSmartAspects(
         else if (t.includes("box")) aspects["Type"] = ["Storage Box"];
         else aspects["Type"] = ["Other"];
       }
+      if (!aspects["Pattern"])  aspects["Pattern"]  = [inferPattern(t)];
+      if (!aspects["Occasion"]) aspects["Occasion"] = [inferOccasion(t, categoryType)];
       break;
 
     case "home_decor":
@@ -880,6 +882,12 @@ export function buildSmartAspects(
         else if (t.includes("clock")) aspects["Type"] = ["Wall Clock"];
         else aspects["Type"] = ["Other"];
       }
+      if (!aspects["Pattern"])  aspects["Pattern"]  = [inferPattern(t)];
+      if (!aspects["Style"])    aspects["Style"]    = [
+        t.includes("modern") ? "Modern" : t.includes("vintage") || t.includes("retro") ? "Vintage" :
+        t.includes("rustic") ? "Rustic" : t.includes("minimalist") ? "Minimalist" :
+        t.includes("boho") || t.includes("bohemian") ? "Boho" : "Contemporary"
+      ];
       break;
 
     default:
@@ -1016,6 +1024,9 @@ export function cleanAndSupplementAspects(
       delete aspects["Fastening"];
       delete aspects["Upper Material"];
       delete aspects["Toe Shape"];
+      // Pet categories don't accept Country of Origin — remove to avoid errors
+      delete aspects["Country/Region of Manufacture"];
+      delete aspects["Country of Origin"];
       // Supplement pet-specific aspects if missing
       if (!aspects["Material"]) aspects["Material"] = [inferPetMaterial(t)];
       if (!aspects["Color"])    aspects["Color"]    = [inferColor(t)];
@@ -1115,7 +1126,18 @@ export function cleanAndSupplementAspects(
     }
   } // end switch
 
-  // ── Step 4: final cleanup ──────────────────────────────────────────────────
+  // ── Step 4: Country of Origin — universal for all CN dropshipping products ──
+  // eBay pre-fills this as "China" in "Sell one like this" — required in many
+  // categories and improves customs visibility for international buyers.
+  // Only set if CN aspects didn't already provide it.
+  if (!aspects["Country/Region of Manufacture"]) {
+    aspects["Country/Region of Manufacture"] = ["China"];
+  }
+  if (!aspects["Country of Origin"]) {
+    aspects["Country of Origin"] = ["China"];
+  }
+
+  // ── Step 5: final cleanup ──────────────────────────────────────────────────
   for (const key of Object.keys(aspects)) {
     aspects[key] = aspects[key]
       .filter((v) => !isChinese(v) && v.trim().length > 0)
