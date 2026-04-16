@@ -143,15 +143,18 @@ Return ONLY this JSON:
       // Pre-compute smart defaults based on title
       const isFootwearCtx = ["shoe","boot","loafer","mule","sneaker","sandal","slipper","heel","pump","oxford","trainer","footwear","flat"].some(w => t.includes(w));
       const smartDefaults: Record<string, string> = {
+        // ── Always-known defaults (no inference needed) ──
+        "Brand":  "Unbranded",
+        "MPN":    "Does Not Apply",
+        "Country/Region of Manufacture": "China",
+        "Country of Origin": "China",
+        // ── Inferred from title ──
         Style: isFootwearCtx
           ? (t.includes("casual") || t.includes("loafer") || t.includes("mule") || t.includes("slip") ? "Casual" : t.includes("sport") || t.includes("running") ? "Athletic" : t.includes("formal") || t.includes("dress") || t.includes("oxford") ? "Formal" : "Casual")
           : (t.includes("vintage") ? "Vintage" : t.includes("modern") ? "Modern" : t.includes("retro") ? "Retro" : t.includes("sport") ? "Athletic" : "Casual"),
         Department: t.includes("men") || t.includes("male") || t.includes("boy") ? "Men" : t.includes("women") || t.includes("female") || t.includes("girl") || t.includes("lady") ? "Women" : t.includes("kid") || t.includes("child") || t.includes("baby") ? "Kids" : "Men",
         Model: "Compatible",
-        // Size Type: the width/fit type — almost always "Regular" for standard shoes
         "Size Type": t.includes("wide") ? "Wide" : t.includes("narrow") ? "Narrow" : t.includes("extra wide") ? "Extra Wide" : "Regular",
-        // Size: eBay requires this even for variation products in some footwear categories.
-        // Use a common men's or women's size as the representative value.
         "Size": t.includes("women") || t.includes("ladies") || t.includes("female") ? "US 7" : "US 9",
         "Occasion": isFootwearCtx
           ? (t.includes("sport") || t.includes("running") || t.includes("gym") ? "Athletic" : t.includes("formal") || t.includes("dress") ? "Formal" : "Casual")
@@ -183,7 +186,14 @@ Return ONLY valid JSON: {"aspects": {"field": ["truncated value"]}}`;
     } else {
       prompt = `You are an eBay listing fixer. Error: "${errorMsg}". Title: ${product.title}. Aspects: ${JSON.stringify(product.aspects).slice(0,200)}. Fix only what the error requires. Return ONLY valid JSON with changed fields, or the text null if unfixable.`;
     }
-    return callClaudeForRewrite(prompt, 400);
+    const raw = await callClaudeForRewrite(prompt, 400);
+    if (!raw?.aspects) return raw;
+    // Normalize aspect values to string[] — Claude sometimes returns strings instead of arrays
+    const normalized: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(raw.aspects as unknown as Record<string, unknown>)) {
+      normalized[k] = Array.isArray(v) ? (v as string[]) : [String(v)];
+    }
+    return { ...raw, aspects: normalized };
   } catch { return null; }
 }
 
@@ -628,20 +638,48 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
       throw err1;
     }
 
-    // ── Missing item specific: Claude adds it, retry immediately ──────────────
+    // ── Missing item specific: fix aspects, retry immediately ────────────────
     if (isMissing && !isImproper && !isCategoryErr) {
-      console.log(`[publish] 🔧 Missing item specific — Claude fixing aspects: ${msg1.slice(0, 80)}`);
-      const fix = await autoFixWithClaude(msg1, {
-        title: publishTitle, description: publishDesc,
-        categoryId: refCategoryId, aspects: publishAspects,
-      });
-      if (fix?.aspects) {
-        Object.assign(publishAspects, fix.aspects);
-        console.log(`[publish] 🔧 Added aspects: ${JSON.stringify(fix.aspects)}`);
+      console.log(`[publish] 🔧 Missing item specific — pre-filling known defaults: ${msg1.slice(0, 80)}`);
+
+      const lowerMsg = msg1.toLowerCase();
+
+      // ── Pre-fill well-known always-fixed values without calling Claude ──────
+      // These are deterministic: Brand=Unbranded, Country=China, etc.
+      // Calling Claude for these wastes tokens and can hallucinate wrong values.
+      if (lowerMsg.includes("brand")) {
+        publishAspects["Brand"] = ["Unbranded"];
+        console.log(`[publish] 🔧 Brand → "Unbranded" (no Claude needed)`);
       }
-      // Safety net: Brand and MPN are always required — force them
-      if (!publishAspects["Brand"]?.length) publishAspects["Brand"] = ["Unbranded"];
-      publishAspects["MPN"] = ["Does Not Apply"];
+      if (lowerMsg.includes("mpn")) {
+        publishAspects["MPN"] = ["Does Not Apply"];
+      }
+      if (lowerMsg.includes("country")) {
+        publishAspects["Country/Region of Manufacture"] = ["China"];
+        publishAspects["Country of Origin"] = ["China"];
+      }
+
+      // ── For other missing fields, ask Claude ─────────────────────────────────
+      // Only call Claude if eBay is asking for something we can't pre-fill
+      const knownFields = ["brand", "mpn", "country/region of manufacture", "country of origin"];
+      const needsClaude = !knownFields.some(f => lowerMsg.includes(f));
+      if (needsClaude) {
+        const fix = await autoFixWithClaude(msg1, {
+          title: publishTitle, description: publishDesc,
+          categoryId: refCategoryId, aspects: publishAspects,
+        });
+        if (fix?.aspects) {
+          // Normalize values to arrays — Claude sometimes returns strings instead of string[]
+          for (const [k, v] of Object.entries(fix.aspects as Record<string, unknown>)) {
+            publishAspects[k] = Array.isArray(v) ? (v as string[]) : [String(v)];
+          }
+          console.log(`[publish] 🔧 Claude added aspects: ${JSON.stringify(fix.aspects)}`);
+        }
+      }
+
+      // Final safety net — always required
+      if (!publishAspects["Brand"]?.length)  publishAspects["Brand"] = ["Unbranded"];
+      if (!publishAspects["MPN"]?.length)    publishAspects["MPN"]   = ["Does Not Apply"];
       try {
         const resultMissing = await addFixedPriceItem({
           title: publishTitle, description: publishDesc,
