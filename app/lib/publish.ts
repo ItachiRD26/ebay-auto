@@ -335,7 +335,7 @@ async function addFixedPriceItem(product: {
   ]);
   const specificsXml = Object.entries(aspects)
     .filter(([name]) => ALWAYS_IN_SPECIFICS.has(name.toLowerCase()) || !variationDimensions.has(name.toLowerCase()))
-    .map(([name, values]) => values.map(v => `<NameValueList><n>${escXml(name)}</n><Value>${escXml(v)}</Value></NameValueList>`).join(""))
+    .map(([name, values]) => values.map(v => `<NameValueList><Name>${escXml(name)}</Name><Value>${escXml(v)}</Value></NameValueList>`).join(""))
     .join("");
   // ── Sanitize description per eBay Trading API rules ─────────────────────────
   const stripProblematic = (text: string): string =>
@@ -352,6 +352,10 @@ async function addFixedPriceItem(product: {
 
   // Log so we can debug "improper" rejections that aren't in the title
   console.log(`[publish] 📄 Desc sent (${safeDesc.length} chars): "${safeDesc.slice(0, 150)}"`);
+  // Debug: log aspects and specificsXml to catch Brand/MPN issues
+  const brandInAspects = aspects["Brand"];
+  const brandInXml = specificsXml.includes("Brand") ? "✅ in XML" : "❌ NOT in XML";
+  console.log(`[publish] 🏷 aspects.Brand=${JSON.stringify(brandInAspects)} ${brandInXml} | specificsXml length=${specificsXml.length}`);
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
