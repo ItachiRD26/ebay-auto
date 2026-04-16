@@ -836,13 +836,51 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
     } catch (err2: unknown) {
       const msg2 = String(err2 instanceof Error ? err2.message : err2);
       console.log(`[publish] ❌ Attempt 2 failed: ${msg2.slice(0, 120)}`);
-      // Auto-reject if both attempts blocked by "improper" — product can't be listed
-      const finalStatus = (msg2.includes("improper") || msg2.includes("policy")) ? "rejected" : "failed";
-      const failReason  = finalStatus === "rejected"
-        ? `AUTO-RECHAZADO: eBay bloqueó el listing 2 veces por palabras problemáticas. Producto no listable en esta cuenta.`
-        : msg2.slice(0, 500);
-      await docRef.update({ status: finalStatus, failReason, updatedAt: Date.now() });
-      throw new Error(failReason);
+
+      // If both attempts fail with "improper OR not permitted" — before auto-rejecting,
+      // try resolving to a DIFFERENT category. The error often means the seller account
+      // doesn't have permission for the specific CN category (e.g. new accounts on
+      // Sporting Goods 15274). A more general category (e.g. 158902 Fitness Equipment)
+      // typically has no seller restrictions.
+      const stillImproper = msg2.includes("improper") || msg2.includes("not be permitted") || msg2.includes("policy");
+      if (stillImproper) {
+        console.log(`[publish] 📂 Both attempts improper/not-permitted — trying fallback category`);
+        try {
+          const fallback = await resolveCategory(refCategoryId, publishTitle);
+          // Only retry if resolveCategory found a DIFFERENT category
+          if (fallback.id !== refCategoryId) {
+            console.log(`[publish] 📂 Fallback category: ${refCategoryId} → ${fallback.id}`);
+            const result3 = await addFixedPriceItem({
+              title: publishTitle, description: publishDesc,
+              categoryId: fallback.id, price: product.suggestedSellingPrice,
+              stock: (product.stock ?? 10), images: refImages,
+              condition: product.condition ?? "New", aspects: publishAspects,
+              variations: refVariations, markupRatio, categoryType: fallback.type,
+              fulfillmentPolicyId: policies.fulfillmentPolicyId,
+              paymentPolicyId:     policies.paymentPolicyId,
+              returnPolicyId:      policies.returnPolicyId,
+              itemCountry:         policies.itemCountry,
+              itemLocation:        policies.itemLocation,
+            }, userToken);
+            itemId = result3.itemId;
+            console.log(`[publish] ✅ Publicado con categoría fallback — ID: ${itemId}`);
+          } else {
+            // resolveCategory returned same category — nothing else to try
+            throw new Error(msg2);
+          }
+        } catch (err3: unknown) {
+          const msg3 = String(err3 instanceof Error ? err3.message : err3);
+          console.log(`[publish] ❌ Fallback category also failed: ${msg3.slice(0, 80)}`);
+          // Mark as failed (not rejected) — might work once account gets category approval
+          const failReason = `eBay bloqueó el listing (posible restricción de categoría para cuenta nueva). Edita la categoría manualmente e intenta de nuevo. Error: ${msg3.slice(0, 300)}`;
+          await docRef.update({ status: "failed", failReason, updatedAt: Date.now() });
+          throw new Error(failReason);
+        }
+      } else {
+        const failReason = msg2.slice(0, 500);
+        await docRef.update({ status: "failed", failReason, updatedAt: Date.now() });
+        throw new Error(failReason);
+      }
     }
     } // end else (improper)
     } // end else (isMissing)
