@@ -54,7 +54,7 @@ Return ONLY valid JSON (no markdown, no extra text):
 {"title":"compliant rewritten title","description":"3-4 sentence professional description"}
 
 Title rules: max 80 chars, keep core product name + key features, remove all brand names and trademarked terms, remove Chinese characters, no HTML, no URLs.
-Description rules: professional tone, highlight features and practical benefits, NO brand names, NO medical claims, NO adult content, NO URLs, plain text only, under 150 words.`;
+Description rules: professional tone, describe the PRODUCT (materials, construction, features) — NOT the workout or body results. CRITICAL: DO NOT mention any body parts (chest, arm, shoulder, muscle, back, leg, neck, waist, hip, glute, bicep, tricep, etc.) or exercise/fitness verbs (strengthen, tone, build, sculpt, burn, train, tighten, slim, firm, flex). These words trigger eBay's automated filter for fitness/sports categories. Instead describe: material, size, adjustability, durability, build quality. NO brand names, NO medical claims, NO URLs, plain text only, under 120 words.`;
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -402,8 +402,16 @@ async function addFixedPriceItem(product: {
   let errBlock; const realErrors: string[] = [];
   while ((errBlock = errorBlockRegex.exec(body)) !== null) {
     const block = errBlock[1];
-    if (block.includes("<SeverityCode>Error</SeverityCode>")) { const m = block.match(/<LongMessage>(.*?)<\/LongMessage>/); realErrors.push(m?.[1] ?? "Unknown error"); }
-    else { const m = block.match(/<ShortMessage>(.*?)<\/ShortMessage>/); console.warn(`[publish] eBay warning: ${m?.[1] ?? "unknown"}`); }
+    const errCode  = block.match(/<ErrorCode>(\d+)<\/ErrorCode>/)?.[1] ?? "?";
+    const shortMsg = block.match(/<ShortMessage>(.*?)<\/ShortMessage>/)?.[1] ?? "";
+    const longMsg  = block.match(/<LongMessage>(.*?)<\/LongMessage>/)?.[1] ?? "Unknown error";
+    if (block.includes("<SeverityCode>Error</SeverityCode>")) {
+      const fullMsg = `[eBay ${errCode}] ${longMsg}`;
+      console.error(`[publish] ❌ eBay error ${errCode}: ${shortMsg} | ${longMsg.slice(0, 120)}`);
+      realErrors.push(fullMsg);
+    } else {
+      console.warn(`[publish] ⚠️ eBay warning ${errCode}: ${shortMsg}`);
+    }
   }
   if (realErrors.length > 0) {
     const combined = realErrors.join(" | ");
@@ -553,6 +561,7 @@ export async function publishProductById(productId: string, userToken: string, u
     [/\bexpander\b/gi,        "resistance trainer"],
     [/\bpulling spring\b/gi,  "resistance spring"],
     [/\bbody builder\b/gi,    "fitness trainer"],
+    [/\btwister\b/gi,         "rotary exerciser"],  // Hasbro trademark — triggers brand violation
   ];
   const preScreened = PRESCREEN.reduce((t, [p, r]) => t.replace(p, r), product.title as string).replace(/\s{2,}/g, " ").trim();
   if (preScreened !== product.title)
@@ -575,16 +584,23 @@ Rewrite the title using ONLY neutral, unambiguous, factual language. No words wi
 
 Product: "${strippedTitle}"
 
-NEVER USE: clip, clamp, chain, strip, hard, tight, drag, harem, sexy, nude, naked, whip, shock, prong, thrust, penetrate, bondage, fetish, restraint, screw, bang, male (for apparel), expander (use "exerciser" or "resistance trainer" instead)
+NEVER USE: clip, clamp, chain, strip, hard, tight, drag, harem, sexy, nude, naked, whip, shock, prong, thrust, penetrate, bondage, fetish, restraint, screw, bang, male (for apparel), expander (use "exerciser" instead), twister (use "rotary exerciser"), puller, gripper-style names that sound adult
 
 Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-3 factual sentences, professional, no brand names, no URLs"}`, 400);
     publishTitle = rewrite?.title ?? preScreened;
-    publishDesc  = rewrite?.description ?? "";
-    console.log(`[publish] 🔒 wasImproper rewrite: "${publishTitle}"`);
+    // ⚠️ NO body-part/exercise descriptions when wasImproper — that's likely what triggered the filter
+    // "chest", "shoulder", "muscle", "strengthen" together = eBay adult-content false positive
+    // Use a completely neutral physical-product description instead
+    publishDesc  = "";   // addFixedPriceItem will use safe generic fallback
+    console.log(`[publish] 🔒 wasImproper rewrite: "${publishTitle}" (desc stripped for safety)`);
   } else {
     const { title, description } = await generateTitleAndDescription(preScreened, refAspects);
+    // Note: if description contains body-part words that might trigger eBay's filter,
+    // addFixedPriceItem's stripProblematic + safe fallback will handle it
     publishTitle = title;
-    publishDesc  = description || `${title}. Quality construction for everyday use. Ships with tracking.`;
+    // Use Claude description ONLY if it exists; otherwise use safe generic fallback
+    // Avoid body-part descriptions in fitness products — they trigger eBay false-positive filters
+    publishDesc  = description || "";
   }
 
   // Generate description from aspects if CN listing was image-based (no text desc)
@@ -595,7 +611,7 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
       const dr = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 200, messages: [{ role: "user", content: `Write a 2-3 sentence eBay product description for: "${publishTitle}". Specs: ${aspectsSummary}. Rules: professional, highlight features/benefits, NO brand names, NO medical claims, NO adult content, NO URLs, plain text only. Return ONLY the description.` }] }),
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 200, messages: [{ role: "user", content: `Write a 2-3 sentence eBay product description for: "${publishTitle}". Specs: ${aspectsSummary}. Rules: professional, describe construction/features/materials, NO brand names, NO medical claims, NO URLs, plain text only. CRITICAL: DO NOT mention any body parts (chest, arm, shoulder, muscle, back, leg, etc.) or exercise verbs (strengthen, tone, build, train, exercise, workout). Describe the PRODUCT not the workout. Return ONLY the description.` }] }),
       });
       if (dr.ok) {
         const dd = await dr.json();
@@ -614,7 +630,8 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
   // The CN seller published with these — eBay already accepted them.
   const publishAspects = refAspects; // pass-through — cleanAndSupplementAspects runs inside addFixedPriceItem
 
-  console.log(`[publish] 🚀 Attempt 1: cat=${refCategoryId} title="${publishTitle}"`);
+  console.log(`[publish] 🚀 Attempt 1: cat=${refCategoryId} aspects=${Object.keys(publishAspects).length} title="${publishTitle}"`);
+  console.log(`[publish] 🏷 Aspects keys: ${Object.keys(publishAspects).slice(0, 12).join(", ")}`);
   console.log(`[publish] 📝 Desc attempt 1 (${publishDesc.length} chars): "${publishDesc.slice(0, 120)}"`);
   let itemId: string;
 
@@ -846,7 +863,11 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
       if (stillImproper) {
         console.log(`[publish] 📂 Both attempts improper/not-permitted — trying fallback category`);
         try {
-          const fallback = await resolveCategory(refCategoryId, publishTitle);
+          // Use original product title for category resolution — not the Claude-rewritten publishTitle
+        // which might contain "Trainer" (mapped to footwear) or other misleading terms
+        const originalTitle = String(product.title ?? publishTitle);
+        const fallback = await resolveCategory(refCategoryId, originalTitle);
+        console.log(`[publish] 📂 Fallback resolving from original title: "${originalTitle.slice(0, 50)}"`);
           // Only retry if resolveCategory found a DIFFERENT category
           if (fallback.id !== refCategoryId) {
             console.log(`[publish] 📂 Fallback category: ${refCategoryId} → ${fallback.id}`);
