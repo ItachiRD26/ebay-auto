@@ -40,6 +40,8 @@ Common flagged words and safe replacements (not exhaustive — use your judgment
 - male (apparel) → "men's"
 - screw (as verb) → "fasten", "attach"
 - suction cup → "vacuum mount", "adhesive mount"
+- expander → "resistance trainer", "exerciser"
+- chest expander → "chest exerciser"
 - whip, bondage, fetish, restraint → never use
 - loose (apparel) → "relaxed fit" or "comfortable"
 - cropped → "short length" or "ankle length"
@@ -546,6 +548,11 @@ export async function publishProductById(productId: string, userToken: string, u
     [/erotic/gi,           "stylish"],
     [/loose/gi,             "relaxed fit"],
     [/cropped/gi,          "short length"],
+    // Fitness terms eBay flags for adult connotation
+    [/chest expander/gi,   "chest exerciser"],
+    [/\bexpander\b/gi,        "resistance trainer"],
+    [/\bpulling spring\b/gi,  "resistance spring"],
+    [/\bbody builder\b/gi,    "fitness trainer"],
   ];
   const preScreened = PRESCREEN.reduce((t, [p, r]) => t.replace(p, r), product.title as string).replace(/\s{2,}/g, " ").trim();
   if (preScreened !== product.title)
@@ -568,7 +575,7 @@ Rewrite the title using ONLY neutral, unambiguous, factual language. No words wi
 
 Product: "${strippedTitle}"
 
-NEVER USE: clip, clamp, chain, strip, hard, tight, drag, harem, sexy, nude, naked, whip, shock, prong, thrust, penetrate, bondage, fetish, restraint, screw, bang, male (for apparel)
+NEVER USE: clip, clamp, chain, strip, hard, tight, drag, harem, sexy, nude, naked, whip, shock, prong, thrust, penetrate, bondage, fetish, restraint, screw, bang, male (for apparel), expander (use "exerciser" or "resistance trainer" instead)
 
 Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-3 factual sentences, professional, no brand names, no URLs"}`, 400);
     publishTitle = rewrite?.title ?? preScreened;
