@@ -262,7 +262,7 @@ async function addFixedPriceItem(product: {
 
   const rawVarData = product.variations;
   // Apply cleaning to variation specifics
-  const varData: VariationsData | null = rawVarData ? {
+  let varData: VariationsData | null = rawVarData ? {
     ...rawVarData,
     variations: rawVarData.variations
       .map((v: VariationSpec) => ({
@@ -291,6 +291,27 @@ async function addFixedPriceItem(product: {
 
   if (varData && varData.variations.length > 0) {
     hasVariations = true;
+    // If pictureDimension is empty, derive it from the first specificsSet key
+    // This happens when CN listing has no per-variant pictures
+    if (!varData.pictureDimension) {
+      const firstDim = Object.keys(varData.specificsSet)[0] ?? "";
+      if (firstDim) {
+        varData = { ...varData, pictureDimension: firstDim };
+        console.log(`[publish] 📐 Derived dimension from specificsSet: "${firstDim}"`);
+      }
+    }
+    // If specificsSet is empty, rebuild from variant specifics
+    if (Object.keys(varData.specificsSet).length === 0 && varData.variations.length > 0) {
+      const rebuilt: Record<string, string[]> = {};
+      for (const v of varData.variations) {
+        for (const [k, val] of Object.entries(v.specifics)) {
+          if (!rebuilt[k]) rebuilt[k] = [];
+          if (!rebuilt[k].includes(val)) rebuilt[k].push(val);
+        }
+      }
+      varData = { ...varData, specificsSet: rebuilt };
+      console.log(`[publish] 🔧 Rebuilt specificsSet from variants: ${JSON.stringify(Object.keys(rebuilt))}`);
+    }
     console.log(`[publish] Variation pricing: markupPercent=${markupRatio*100-100}% → ×${markupRatio.toFixed(3)}`);
     const variationItems = varData.variations.map((v: VariationSpec) => {
       // Apply markup directly to each variant's own refPrice.
@@ -634,6 +655,8 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
   // The CN seller published with these — eBay already accepted them.
   const publishAspects = refAspects; // pass-through — cleanAndSupplementAspects runs inside addFixedPriceItem
 
+  // Log policy IDs so we can diagnose "seller not permitted" errors
+  console.log(`[publish] 📋 Policies: fulfillment=${policies.fulfillmentPolicyId?.slice(-6)} payment=${policies.paymentPolicyId?.slice(-6)} return=${policies.returnPolicyId?.slice(-6)} country=${policies.itemCountry} location=${policies.itemLocation}`);
   console.log(`[publish] 🚀 Attempt 1: cat=${refCategoryId} aspects=${Object.keys(publishAspects).length} title="${publishTitle}"`);
   console.log(`[publish] 🏷 Aspects keys: ${Object.keys(publishAspects).slice(0, 12).join(", ")}`);
   console.log(`[publish] 📝 Desc attempt 1 (${publishDesc.length} chars): "${publishDesc.slice(0, 120)}"`);
@@ -876,12 +899,13 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
             Brand: ["Unbranded"],
             MPN:   ["Does Not Apply"],
           };
-          // Keep Color and Material if they exist and are clean
-          if (publishAspects["Color"])    minimalAspects["Color"]    = publishAspects["Color"];
-          if (publishAspects["Material"]) minimalAspects["Material"] = publishAspects["Material"];
-          if (publishAspects["Style"])    minimalAspects["Style"]    = publishAspects["Style"];
-          if (publishAspects["Type"])     minimalAspects["Type"]     = publishAspects["Type"];
-          if (publishAspects["Country/Region of Manufacture"]) minimalAspects["Country/Region of Manufacture"] = ["China"];
+          // Keep common aspects — dimensions are required in some categories
+          const keepAspects = ["Color","Material","Style","Type","Size","Department",
+            "Item Length","Item Width","Item Height","Country/Region of Manufacture"];
+          for (const k of keepAspects) {
+            if (publishAspects[k]) minimalAspects[k] = publishAspects[k];
+          }
+          minimalAspects["Country/Region of Manufacture"] = ["China"];
 
           const result3 = await addFixedPriceItem({
             title: publishTitle, description: publishDesc,
