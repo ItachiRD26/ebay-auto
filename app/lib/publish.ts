@@ -411,9 +411,10 @@ async function addFixedPriceItem(product: {
     req.write(buf); req.end();
   });
 
-  // Log XML content WITHOUT token (token is ~500 chars and hides the actual content)
+  // Log XML content WITHOUT token — split into sections to see ItemSpecifics + Variations
   const xmlForLog = xml.replace(/<eBayAuthToken>[^<]+<\/eBayAuthToken>/, "<eBayAuthToken>[TOKEN]</eBayAuthToken>");
-  console.log(`[publish] 📤 XML content: ${xmlForLog.slice(0, 1500)}`);
+  const itemStart = xmlForLog.indexOf("<Item>");
+  console.log(`[publish] 📤 XML <Item> section: ${xmlForLog.slice(itemStart, itemStart + 2000)}`);
   if (statusCode !== 200) throw new Error(`HTTP ${statusCode}`);
   const errorBlockRegex = /<Errors>([\s\S]*?)<\/Errors>/g;
   let errBlock; const realErrors: string[] = [];
