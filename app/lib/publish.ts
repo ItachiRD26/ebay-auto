@@ -411,11 +411,15 @@ async function addFixedPriceItem(product: {
     req.write(buf); req.end();
   });
 
-  // Log XML content WITHOUT token — split into sections to see ItemSpecifics + Variations
+  // Log XML Variations + ItemSpecifics sections only
   const xmlForLog = xml.replace(/<eBayAuthToken>[^<]+<\/eBayAuthToken>/, "<eBayAuthToken>[TOKEN]</eBayAuthToken>");
-  const itemStart = xmlForLog.indexOf("<Item>");
-  console.log(`[publish] 📤 XML <Item> section: ${xmlForLog.slice(itemStart, itemStart + 2000)}`);
+  const varIdx = xmlForLog.indexOf("<Variations>");
+  const specIdx = xmlForLog.indexOf("<ItemSpecifics>");
+  if (varIdx >= 0)  console.log(`[publish] 📤 <Variations>: ${xmlForLog.slice(varIdx, varIdx + 800)}`);
+  if (specIdx >= 0) console.log(`[publish] 📤 <ItemSpecifics>: ${xmlForLog.slice(specIdx, specIdx + 600)}`);
   if (statusCode !== 200) throw new Error(`HTTP ${statusCode}`);
+  // Log full eBay response to see ErrorParameters
+  console.log(`[publish] 📥 eBay response: ${body.slice(0, 1000)}`);
   const errorBlockRegex = /<Errors>([\s\S]*?)<\/Errors>/g;
   let errBlock; const realErrors: string[] = [];
   while ((errBlock = errorBlockRegex.exec(body)) !== null) {
