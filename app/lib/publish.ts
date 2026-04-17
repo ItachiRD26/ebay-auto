@@ -383,12 +383,12 @@ async function addFixedPriceItem(product: {
     ${!hasVariations ? `<StartPrice>${product.price.toFixed(2)}</StartPrice>` : ""}
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
     <ConditionID>${conditionId}</ConditionID>
-    <Country>${product.itemCountry ?? "CN"}</Country>
+    <Country>${product.itemCountry ?? process.env.EBAY_ITEM_COUNTRY ?? "US"}</Country>
     <Currency>USD</Currency>
     <DispatchTimeMax>5</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
-    <Location>${product.itemLocation ?? "Shenzhen"}</Location>
+    <Location>${product.itemLocation ?? process.env.EBAY_ITEM_LOCATION ?? "United States"}</Location>
     ${!hasVariations ? `<Quantity>${product.stock}</Quantity>` : ""}
     <PictureDetails><GalleryType>Gallery</GalleryType>${picturesXml}</PictureDetails>
     ${specificsXml ? `<ItemSpecifics>${specificsXml}</ItemSpecifics>` : ""}
@@ -464,8 +464,8 @@ async function getStorePolicies(userId: string, storeId: string): Promise<{
         fulfillmentPolicyId: p.fulfillmentPolicyId,
         paymentPolicyId:     p.paymentPolicyId,
         returnPolicyId:      p.returnPolicyId,
-        itemCountry:         p.itemCountry   ?? "CN",
-        itemLocation:        p.itemLocation  ?? "Shenzhen",
+        itemCountry:         p.itemCountry   ?? process.env.EBAY_ITEM_COUNTRY  ?? "US",
+        itemLocation:        p.itemLocation  ?? process.env.EBAY_ITEM_LOCATION ?? "United States",
       };
     }
   } catch {}
@@ -473,8 +473,8 @@ async function getStorePolicies(userId: string, storeId: string): Promise<{
     fulfillmentPolicyId: process.env.EBAY_FULFILLMENT_POLICY_ID ?? "",
     paymentPolicyId:     process.env.EBAY_PAYMENT_POLICY_ID     ?? "",
     returnPolicyId:      process.env.EBAY_RETURN_POLICY_ID      ?? "",
-    itemCountry:         "CN",
-    itemLocation:        "Shenzhen",
+    itemCountry:         process.env.EBAY_ITEM_COUNTRY  ?? "US",
+    itemLocation:        process.env.EBAY_ITEM_LOCATION ?? "United States",
   };
 }
 
