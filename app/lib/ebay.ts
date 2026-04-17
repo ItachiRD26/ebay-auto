@@ -146,6 +146,58 @@ export async function searchProducts(keywords: string, limit = 200, userId = "de
   return res.json();
 }
 
+// ─── Browse API: Multi-page parallel search ──────────────────────────────────
+// Fetches up to 5 pages of 200 items in parallel = up to 1000 items total.
+// Uses all 5 sort orders in one shot for maximum diversity.
+// Deduplicates by itemId before returning.
+export async function searchProductsMultiPage(
+  keywords: string,
+  pages = 5,
+  userId = "default",
+): Promise<{ itemSummaries: Record<string, unknown>[] }> {
+  const token   = await getAppToken();
+  const headers = {
+    Authorization:             `Bearer ${token}`,
+    "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+    "Content-Type":            "application/json",
+  };
+
+  const sorts = ["bestMatch", "newlyListed", "price", "-price", "distance"] as const;
+  const kwHash   = [...keywords.toLowerCase().trim()].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const userHash = [...userId].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const timeSlot = Math.floor(Date.now() / (60 * 60 * 1000));
+  const baseBucket = Math.floor((kwHash + userHash + timeSlot) / sorts.length) % 5;
+  const baseOffset = baseBucket * 200;
+
+  const fetchPage = (i: number) => {
+    const sort   = sorts[i % sorts.length];
+    const offset = (baseOffset + i * 200) % 1000;
+    const params = new URLSearchParams({
+      q: keywords, limit: "200", sort, offset: offset.toString(),
+      filter: "buyingOptions:{FIXED_PRICE},itemLocationCountry:CN,conditions:{NEW}",
+      fieldgroups: "EXTENDED",
+    });
+    return fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`,
+      { headers, signal: AbortSignal.timeout(30000) });
+  };
+
+  console.log(`[search-multi] "${keywords.trim()}" — ${pages} pages in parallel (baseOffset=${baseOffset})`);
+  const responses = await Promise.allSettled(Array.from({ length: Math.min(pages, 5) }, (_, i) => fetchPage(i)));
+
+  const seen = new Set<string>();
+  const items: Record<string, unknown>[] = [];
+  for (const r of responses) {
+    if (r.status !== "fulfilled" || !r.value.ok) continue;
+    const data = await r.value.json() as { itemSummaries?: Record<string, unknown>[] };
+    for (const item of data.itemSummaries ?? []) {
+      const id = item.itemId as string;
+      if (id && !seen.has(id)) { seen.add(id); items.push(item); }
+    }
+  }
+  console.log(`[search-multi] "${keywords.trim()}" — ${items.length} unique items`);
+  return { itemSummaries: items };
+}
+
 // ─── Taxonomy helpers ─────────────────────────────────────────────────────────
 const _taxonomyCache = new Map<string, string>();
 

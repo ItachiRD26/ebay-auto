@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchProducts, getUserToken, getAppToken } from "@/lib/ebay";
+import { searchProducts, searchProductsMultiPage, getUserToken, getAppToken } from "@/lib/ebay";
 import { QueueProduct } from "@/types";
 import { resetProgress, updateProgress, endProgress, skipProgress } from "@/lib/search-progress";
 
@@ -14,6 +14,7 @@ const CONFIG = {
   EPROLO_SHIP_AVG:    10,
   STOCK:              10,   // default — overridden by userSettings.defaultStock per-user
   ITEMS_PER_SEARCH:   200,   // Browse API max per request
+  PAGES_PER_SEARCH:   5,     // parallel pages = 5×200 = 1000 items per keyword
 };
 
 // ─── Keywords — loaded dynamically from Firestore, fallback to defaults ─────────
@@ -341,16 +342,52 @@ function notChina(country: string | null | undefined): boolean {
   return !isChina(country);
 }
 
-// ─── Core: process one item and add to queue if it passes all filters ─────────
-async function processItem(
+// ─── Phase 1: Fast pre-filter using only Browse summary data (0 extra API calls) ──
+// Returns false immediately for obvious rejects.
+// Only items that pass go to Phase 2 (Insights API).
+function preFilterItem(
+  item: Record<string, unknown>,
+  excluded: string[],
+  seenIds: Set<string>,
+  minPrice: number,
+  maxPrice: number,
+): boolean {
+  const title     = (item.title as string) ?? "";
+  const itemId    = item.itemId as string;
+  const numericId = extractNumericId(itemId);
+
+  // Price
+  const pricing = calcPricing(item);
+  if (pricing.ebayRefPrice < minPrice || pricing.ebayRefPrice > maxPrice) return false;
+
+  // Banned keywords in title
+  if (isBannedWith(title, excluded)) return false;
+
+  // Country from summary (CN filter already applied in Browse API query,
+  // but some items slip through with HK/TW — check just in case)
+  const summaryCountry = (item.itemLocation as { country?: string })?.country ?? "";
+  if (notChina(summaryCountry)) return false;
+
+  // Condition
+  const conditionId = (item.conditionId as string) ?? "";
+  if (conditionId && !["1000", "1500"].includes(conditionId)) return false;
+
+  // Already seen
+  if (seenIds.has(numericId)) return false;
+
+  return true;
+}
+
+// ─── Phase 2: Deep evaluation for candidates (Insights API → Trading API fallback) ──
+async function processCandidate(
   item: Record<string, unknown>,
   label: string,
   storeId: string,
   userId: string,
-  excluded: string[],
   minSoldTotal: number,
   minSold30d: number,
-  defaultStock: number = 10,
+  defaultStock: number,
+  appToken: string,
 ): Promise<string | false> {
   const title      = (item.title as string) ?? "";
   const itemId     = item.itemId as string;
@@ -358,49 +395,26 @@ async function processItem(
   const itemUrl    = item.itemWebUrl as string;
   const categoryId = ((item.categories as { categoryId: string }[])?.[0]?.categoryId) ?? "";
   const catName    = ((item.categories as { categoryName: string }[])?.[0]?.categoryName) ?? "";
+  const pricing    = calcPricing(item);
 
-  // ── 1. Basic filters ────────────────────────────────────────────────────────
-  const pricing = calcPricing(item);
-
-  if (pricing.ebayRefPrice < CONFIG.MIN_PRICE || pricing.ebayRefPrice > CONFIG.MAX_PRICE) {
-    skipProgress(userId, "price", `$${pricing.ebayRefPrice}`);
-    return false;
-  }
-  if (isBannedWith(title, excluded)) {
-    skipProgress(userId, "banned", title.slice(0, 40));
-    return false;
+  // ── Sales data: Insights API first, Trading API fallback ──────────────────
+  let td = await getSoldDataFromInsights(numericId, appToken);
+  if (!td) {
+    // Insights API failed or returned nothing — fall back to Trading API
+    td = await getItemDataViaTradingAPI(numericId, storeId);
   }
 
-  // ── 2. China origin check (Browse API summary) ──────────────────────────────
-  const summaryCountry = (item.itemLocation as { country?: string })?.country ?? "";
-  if (notChina(summaryCountry)) {
-    skipProgress(userId, "country", summaryCountry);
-    return false;
-  }
-
-  // ── 3. Quick pre-checks before expensive Trading API call ─────────────────
-  // Skip if condition is clearly not new
-  const conditionId = (item.conditionId as string) ?? "";
-  if (conditionId && !["1000","1500"].includes(conditionId)) {
-    skipProgress(userId, "condition", conditionId);
-    return false;
-  }
-
-  // ── 4. Trading API: sales data + country confirmation ──────────────────────
-  const td = await getItemDataViaTradingAPI(numericId, storeId);
-
-  // Confirm China origin via Trading API
+  // Confirm country via Trading API data
   if (notChina(td.shipFromCountry)) {
     skipProgress(userId, "country", td.shipFromCountry ?? "?");
     return false;
   }
 
-  // ── 5. Sales filters ────────────────────────────────────────────────────────
-  const ageLabel = td.listingAgeDays < 90 ? "nuevo" :
-                   td.listingAgeDays < 365 ? `${Math.round(td.listingAgeDays/30)}m` :
+  const ageLabel = td.listingAgeDays < 90  ? "nuevo" :
+                   td.listingAgeDays < 365  ? `${Math.round(td.listingAgeDays/30)}m` :
                    `${(td.listingAgeDays/365).toFixed(1)}a`;
 
-  console.log(`\n   🔎 "${title.slice(0,60)}"`);
+  console.log(`\n   🔎 "${title.slice(0, 60)}"`);
   console.log(`      Precio: $${pricing.ebayRefPrice} + $${pricing.ebayShippingCost} envio = $${pricing.totalMarketCost} mercado`);
   console.log(`      Ventas: ${td.soldCount} total | ~${td.estimatedSold30d} est/30d | listing: ${ageLabel} | ID:${numericId}`);
 
@@ -408,60 +422,40 @@ async function processItem(
     skipProgress(userId, "sales", `${td.soldCount} sold < ${minSoldTotal} min`);
     return false;
   }
-
   if (td.estimatedSold30d < minSold30d) {
     skipProgress(userId, "sales", `~${td.estimatedSold30d}/30d < ${minSold30d} min`);
     return false;
   }
 
-  // ── 6. Duplicate check — seen_items first (fast), then queue ────────────────
+  // ── Queue duplicate check ─────────────────────────────────────────────────
   const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim();
-
-  // Check seen_items (light collection — survives product deletion)
-  const seenDoc = await seenCol(userId).doc(numericId).get();
-  if (seenDoc.exists) {
-    skipProgress(userId, "duplicate");
-    return false;
-  }
-
-  // Fallback: also check queue (for items added before seen_items existed)
   const dup = await queueCol(userId).where("ebayItemId", "==", numericId).limit(1).get();
-  if (!dup.empty) {
-    skipProgress(userId, "duplicate");
-    return false;
-  }
-
+  if (!dup.empty) { skipProgress(userId, "duplicate"); return false; }
   const titleDup = await queueCol(userId).where("normalizedTitle", "==", normalizedTitle).limit(1).get();
-  if (!titleDup.empty) {
-    skipProgress(userId, "duplicate");
-    return false;
-  }
+  if (!titleDup.empty) { skipProgress(userId, "duplicate"); return false; }
 
-  // ── 7. Build and save queue product ─────────────────────────────────────────
+  // ── Accept — save to queue ────────────────────────────────────────────────
   console.log(`      ✅ ACEPTADO | mercado $${pricing.totalMarketCost} | listamos $${pricing.suggestedSellingPrice} | ~${td.estimatedSold30d}/30d`);
 
   const images =
     (item.thumbnailImages as { imageUrl: string }[])?.map((i) => i.imageUrl) ||
-    ((item.image as { imageUrl: string })?.imageUrl
-      ? [(item.image as { imageUrl: string }).imageUrl]
-      : []);
+    ((item.image as { imageUrl: string })?.imageUrl ? [(item.image as { imageUrl: string }).imageUrl] : []);
 
-  const queueProduct: Omit<QueueProduct, "id"> = {
-    userId,
-    storeId,
-    ebayItemId:            numericId,  // numeric only — needed for Trading API GetItem
+  const queueProduct: Omit<import("@/types").QueueProduct, "id"> = {
+    userId, storeId,
+    ebayItemId:            numericId,
     title,
-    normalizedTitle:       title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 60).trim(),
+    normalizedTitle,
     images,
     ebayReferencePrice:    pricing.ebayRefPrice,
     ebayShippingCost:      pricing.ebayShippingCost,
     totalMarketCost:       pricing.totalMarketCost,
     refPriceMin:           pricing.ebayRefPrice,
-    refPriceMax:           pricing.ebayRefPrice,       // Browse API only gives min; updated at publish from GetItem
+    refPriceMax:           pricing.ebayRefPrice,
     eproloPrice:           null,
     eproloUrl:             null,
     suggestedSellingPrice: pricing.suggestedSellingPrice,
-    markupPercent:         6,                          // default 6% — editable per product
+    markupPercent:         6,
     margin:                null,
     marginPercent:         null,
     categoryId,
@@ -476,12 +470,12 @@ async function processItem(
     stock:                 defaultStock,
     createdAt:             Date.now(),
     updatedAt:             Date.now(),
-    expiresAt:             Date.now() + 24 * 60 * 60 * 1000 as unknown as Date, // stored as ms timestamp
+    expiresAt:             Date.now() + 24 * 60 * 60 * 1000 as unknown as Date,
   };
 
   const docRef = queueCol(userId).doc();
   await docRef.set({ ...queueProduct, status: "approved" });
-  return docRef.id; // return ID for auto-publish
+  return docRef.id;
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
@@ -497,60 +491,78 @@ export async function POST(req: NextRequest) {
     const { keywords, limit = 50, autoSearch = false, storeId, userId } = body;
     if (!storeId) return NextResponse.json({ error: "storeId required" }, { status: 400 });
 
-    // Check if token was already detected as expired in a previous call
     if (_tokenExpiredStoreId === storeId) {
       console.warn(`[search] ⛔ Aborting — token expired for store ${storeId}`);
-      return NextResponse.json({
-        error: "TOKEN_EXPIRED",
-        message: "eBay token expired — please reconnect your store",
-        storeId,
-      }, { status: 401 });
+      return NextResponse.json({ error: "TOKEN_EXPIRED", message: "eBay token expired — please reconnect your store", storeId }, { status: 401 });
     }
-    if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
+    if (!userId) return NextResponse.json({ error: "userId required" }, { status: 400 });
 
-    let totalAdded = 0;
-    const kws          = await getKeywords(userId);
-    const userSettings = await getUserSettings(userId);
-
-    // Single keyword search (frontend loops for auto-search)
     const kw = keywords || "";
     if (!kw) return NextResponse.json({ error: "keywords required" }, { status: 400 });
 
-    console.log(`\n🔍 Búsqueda: "${kw}"`);
-    let result: { itemSummaries?: unknown[] };
+    const kws          = await getKeywords(userId);
+    const userSettings = await getUserSettings(userId);
+    const appToken     = await getAppToken();
+
+    // ── Fetch 1000 items in parallel (5 × 200) ─────────────────────────────
+    console.log(`\n🔍 Búsqueda: "${kw}" — fetching up to ${CONFIG.PAGES_PER_SEARCH * 200} items`);
+    let allItems: Record<string, unknown>[];
     try {
-      result = await searchProducts(kw, CONFIG.ITEMS_PER_SEARCH, userId);
+      const result = await searchProductsMultiPage(kw, CONFIG.PAGES_PER_SEARCH, userId);
+      allItems = result.itemSummaries;
     } catch (searchErr) {
       const msg = searchErr instanceof Error ? searchErr.message : String(searchErr);
       console.warn(`[search] ⚠️ Failed "${kw}":`, msg);
       return NextResponse.json({ error: msg }, { status: 500 });
     }
+    console.log(`   ${allItems.length} items fetched`);
 
-    const items = (result.itemSummaries ?? []) as Record<string, unknown>[];
-    console.log(`   ${items.length} items`);
-    let totalReviewed = 0;
-    let totalSkipped = 0;
+    // ── Phase 1: Load seen_items IDs into memory (1 Firestore query) ────────
+    // Much cheaper than 1 query per item. Covers all items in one shot.
+    const seenSnap = await seenCol(userId).select().get();  // select() = IDs only, no data
+    const seenIds  = new Set(seenSnap.docs.map(d => d.id));
+    console.log(`   ${seenIds.size} items already seen (loaded in 1 query)`);
 
-    // Reset server-side progress so the polling endpoint shows live data
-    resetProgress(userId, items.length);
+    // Phase 1 pre-filter — pure Browse data, 0 extra API calls
+    const candidates = allItems.filter(item =>
+      preFilterItem(item, kws.excluded, seenIds, CONFIG.MIN_PRICE, CONFIG.MAX_PRICE)
+    );
+    const phase1Rejected = allItems.length - candidates.length;
+    console.log(`   Phase 1: ${candidates.length} candidates (rejected ${phase1Rejected} without API calls)`);
+
+    // ── Phase 2: Deep evaluation for candidates only ─────────────────────────
+    resetProgress(userId, allItems.length);
     updateProgress(userId, { keyword: kw });
 
-    for (const item of items) {
+    let totalAdded    = 0;
+    let totalReviewed = 0;
+    let totalSkipped  = phase1Rejected;  // count phase 1 rejects in skipped total
+
+    for (const item of candidates) {
       totalReviewed++;
-      const productId = await processItem(item, kw, storeId, userId, kws.excluded, userSettings.minSoldCount, userSettings.minSold30d, userSettings.defaultStock);
-      if (productId) {
-        totalAdded++;
-      } else {
-        totalSkipped++;
-      }
-      // Update server-side progress after every item — frontend polls this
-      updateProgress(userId, { reviewed: totalReviewed, passed: totalAdded });
-      await new Promise((r) => setTimeout(r, 200));
+      const productId = await processCandidate(
+        item, kw, storeId, userId,
+        userSettings.minSoldCount, userSettings.minSold30d, userSettings.defaultStock,
+        appToken,
+      );
+      if (productId) totalAdded++;
+      else           totalSkipped++;
+
+      updateProgress(userId, { reviewed: totalReviewed + phase1Rejected, passed: totalAdded });
+      await new Promise(r => setTimeout(r, 200));
     }
 
     endProgress(userId);
 
-    return NextResponse.json({ success: true, added: totalAdded, published: 0, reviewed: totalReviewed, skipped: totalSkipped });
+    console.log(`\n✅ "${kw}" — revisados ${allItems.length} | candidatos ${candidates.length} | añadidos ${totalAdded}`);
+    return NextResponse.json({
+      success: true,
+      added:      totalAdded,
+      published:  0,
+      reviewed:   allItems.length,
+      candidates: candidates.length,
+      skipped:    totalSkipped,
+    });
 
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
