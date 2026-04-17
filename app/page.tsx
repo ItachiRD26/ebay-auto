@@ -287,7 +287,13 @@ export default function Dashboard() {
     setPublishTarget(product);
   };
 
-  const handlePublishConfirm = async (productId: string, storeIds: string[]) => {
+  const handlePublishConfirm = async (productId: string, storeIds: string[], stock: number) => {
+    // Save stock to Firestore before publishing
+    await fetch("/api/ebay/queue", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId, updates: { stock }, userId: uid }),
+    });
     const errors: string[] = [];
     for (const storeId of storeIds) {
       const res  = await fetch("/api/ebay/publish", {

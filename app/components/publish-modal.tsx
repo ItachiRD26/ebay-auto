@@ -8,7 +8,7 @@ interface Props {
   stores: Store[];
   defaultStoreId?: string;
   onClose: () => void;
-  onConfirm: (productId: string, storeIds: string[]) => Promise<void>;
+  onConfirm: (productId: string, storeIds: string[], stock: number) => Promise<void>;
 }
 
 export default function PublishModal({ product, stores, defaultStoreId, onClose, onConfirm }: Props) {
@@ -17,7 +17,9 @@ export default function PublishModal({ product, stores, defaultStoreId, onClose,
   const [selectedIds, setSelectedIds] = useState<string[]>(
     defaultStoreId ? [defaultStoreId] : connectedStores.length ? [connectedStores[0].id] : []
   );
+  const [stock, setStock] = useState<number>(product.stock ?? 10);
   const [loading, setLoading] = useState(false);
+  const hasVariations = !!(product as QueueProduct & { tooManyVariations?: boolean; variations?: unknown }).variations || product.title?.toLowerCase().includes("pack of");
 
   const toggle = (storeId: string) => {
     setSelectedIds(prev =>
@@ -32,7 +34,7 @@ export default function PublishModal({ product, stores, defaultStoreId, onClose,
     if (!canPublish || loading) return;
     setLoading(true);
     try {
-      await onConfirm(product.id, selectedIds);
+      await onConfirm(product.id, selectedIds, stock);
       onClose();
     } finally {
       setLoading(false);
@@ -68,6 +70,27 @@ export default function PublishModal({ product, stores, defaultStoreId, onClose,
               ${product.suggestedSellingPrice.toFixed(2)}
               {product.marginPercent != null && <span style={{ marginLeft: 6, color: "var(--green)" }}>+{product.marginPercent.toFixed(0)}%</span>}
             </div>
+          </div>
+        </div>
+
+        {/* Stock field */}
+        <div style={{ padding: "0.75rem 1.25rem", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
+          <div>
+            <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text2)" }}>
+              Cantidad en venta (Stock)
+            </div>
+            <div style={{ fontSize: "0.68rem", color: "var(--text3)", marginTop: 2 }}>
+              {hasVariations ? "Se aplica a cada variante" : "Unidades disponibles"}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <button onClick={() => setStock(s => Math.max(1, s - 1))}
+              style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid var(--border2)", background: "var(--bg3)", color: "var(--text)", fontSize: "1rem", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
+            <input type="number" min={1} max={9999} value={stock}
+              onChange={e => setStock(Math.max(1, parseInt(e.target.value) || 1))}
+              style={{ width: 64, textAlign: "center", padding: "0.3rem 0.4rem", background: "var(--bg3)", border: "1px solid var(--border2)", borderRadius: 6, color: "var(--text)", fontSize: "0.9rem", fontWeight: 600, outline: "none" }} />
+            <button onClick={() => setStock(s => s + 1)}
+              style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid var(--border2)", background: "var(--bg3)", color: "var(--text)", fontSize: "1rem", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
           </div>
         </div>
 
