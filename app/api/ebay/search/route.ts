@@ -318,6 +318,11 @@ async function getItemDataViaTradingAPI(numericItemId: string, storeId: string):
       // < 90 days: decay = 1.0 (velocity is fresh and reliable)
 
       estimatedSold30d = Math.round(soldPerDay * 30 * decay);
+      // Floor: if a listing has meaningful total sales and is still active,
+      // give it at least 1 est/30d so it's not unfairly rejected.
+      // A product with 10+ total sales over years is a steady seller.
+      if (estimatedSold30d === 0 && soldCount >= 10) estimatedSold30d = 1;
+      if (estimatedSold30d === 0 && soldCount >= 5 && listingAgeDays < 730) estimatedSold30d = 1;
     }
 
     // ── Country ───────────────────────────────────────────────────────────────
@@ -371,6 +376,11 @@ function preFilterItem(
   // Condition
   const conditionId = (item.conditionId as string) ?? "";
   if (conditionId && !["1000", "1500"].includes(conditionId)) return false;
+
+  // Shipping cost sanity — block $30+ shipping (industrial tools, heavy items)
+  const shippingOpts = item.shippingOptions as Array<{ shippingCost?: { value?: string } }> | undefined;
+  const shippingVal  = parseFloat(shippingOpts?.[0]?.shippingCost?.value ?? "0") || 0;
+  if (shippingVal > 30) return false;
 
   // Already seen
   if (seenIds.has(numericId)) return false;

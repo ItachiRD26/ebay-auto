@@ -378,11 +378,13 @@ export const DEFAULT_EXCLUDED_KEYWORDS = [
 "dildo","vibrator","sex toy","anal","butt plug","penis enlargement",
 "male enhancement","adult toy","erection","cock ring","chastity",
 "penis pump","penile","erectile","extender penis",
+"bdsm","bondage","restraint","fetish",
 "gun","firearm","ammo","ammunition","rifle","pistol","replica","counterfeit","fake",
 "mercedes","bmw","audi","porsche","ferrari","lamborghini","tesla","ford","chevrolet",
 "toyota","honda","nissan","hyundai","volkswagen","subaru","mazda",
 "starbucks","nespresso","keurig","red bull","monster energy","coca cola","pepsi",
-"anime","manga","waifu","yugioh","magic the gathering","tcg","ccg","playmat"
+"anime","manga","waifu","yugioh","magic the gathering","tcg","ccg","playmat",
+"keyway broach","broaching","hss cutter","metric broach","push type broach"
 ];
 
 // GET — return keyword lists for this user
