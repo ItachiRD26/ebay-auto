@@ -411,6 +411,8 @@ async function addFixedPriceItem(product: {
     req.write(buf); req.end();
   });
 
+  // Log the full XML sent for debugging error 240
+  console.log(`[publish] 📤 XML sent (first 800 chars): ${xml.slice(0, 800)}`);
   if (statusCode !== 200) throw new Error(`HTTP ${statusCode}`);
   const errorBlockRegex = /<Errors>([\s\S]*?)<\/Errors>/g;
   let errBlock; const realErrors: string[] = [];
