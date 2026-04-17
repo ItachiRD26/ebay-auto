@@ -15,48 +15,33 @@ interface ReferenceItemData { title: string; description: string; categoryId: st
 export async function generateTitleAndDescription(title: string, aspects: Record<string, string[]>): Promise<{ title: string; description: string }> {
   try {
     const aspectsText = Object.entries(aspects).slice(0, 8).map(([k, v]) => `${k}: ${v.join(", ")}`).join("\n");
-    const prompt = `You are an eBay listing writer AND content policy specialist. Your job is two things at once:
-1. Rewrite the title to be clear, keyword-rich, and eBay-compliant
-2. Proactively identify and replace ANY word that could be flagged by eBay automated content filter
+    const prompt = `You are a professional eBay listing copywriter. Write compelling, detailed listings that sell.
 
 Product title: ${title}
 ${aspectsText ? `Details:\n${aspectsText}` : ""}
 
-eBay filter is aggressive and flags words based on pattern-matching, not context. It flags innocent words if they have ANY possible adult/violent connotation elsewhere.
+Write a rich product description like a top US seller would — engaging, benefit-focused, with a bullet-point feature list.
 
-THINK BEFORE WRITING: scan each word. Ask: "Could this word EVER appear in adult content, weapons, or hate speech contexts?" If yes, replace it even if innocent here.
+Structure:
+- 2-3 opening sentences highlighting what makes this product great (material, design, quality, use case)
+- 1-2 sentences about daily use or lifestyle fit
+- 1 sentence about craftsmanship or reliability
+- "Details:" followed by 4-6 bullet points with key specs/features
 
-Common flagged words and safe replacements (not exhaustive — use your judgment for others):
-- clip / clip-on → "attachable", "mount", "holder"
-- clamp / clamping → "grip", "bracket", "securing"
-- chain → "link", "metal band", "steel band"
-- strip → "band", "tape", "panel"
-- drag → "slip-on", "backless", "pull-on"
-- choke → "standard collar", "flat collar"
-- shock → "vibration", "static"
-- prong → "pin", "contact point"
-- bang, thrust, penetrate → rephrase completely
-- nude, naked, flesh → "natural", "skin-tone"
-- male (apparel) → "men's"
-- screw (as verb) → "fasten", "attach"
-- suction cup → "vacuum mount", "adhesive mount"
-- expander → "resistance trainer", "exerciser"
-- chest expander → "chest exerciser"
-- healing, therapy, magnetic therapy, wellness, gauss → remove completely (medical claims)
-- regulator (health context) → remove
-- whip, bondage, fetish, restraint → never use
-- loose (apparel) → "relaxed fit" or "comfortable"
-- cropped → "short length" or "ankle length"
-- harem (pants style) → "wide leg" or "relaxed"
-- oversized → "comfortable fit" or "relaxed"
+Style: confident, clean, factual. Like a premium Amazon or eBay listing. No fluff.
 
-For ANY other word you identify as potentially flagged: use your best judgment to replace it with a neutral, professional alternative that preserves the product meaning.
+Rules:
+- Max 300 words total
+- NO brand names, NO dropshipping mentions, NO Chinese supplier references
+- NO explicit sexual content, NO weapons, NO hate speech
+- Plain text only — no HTML tags, bullets with "*"
+- Avoid: nude, naked, bondage, fetish, whip, penetrate, bang, screw (as verb)
+- For apparel: "relaxed fit" not "loose", "wide leg" not "harem", "men's" not "male"
+
+Also rewrite the title: clear, keyword-rich, max 80 chars, no brand names, no Chinese characters.
 
 Return ONLY valid JSON (no markdown, no extra text):
-{"title":"compliant rewritten title","description":"3-4 sentence professional description"}
-
-Title rules: max 80 chars, keep core product name + key features, remove all brand names and trademarked terms, remove Chinese characters, no HTML, no URLs.
-Description rules: professional tone, describe the PRODUCT (materials, construction, features) — NOT the workout or body results. CRITICAL: DO NOT include medical/health claims — no "healing", "therapy", "wellness", "magnetic therapy", "gauss", "regulator", or any claim that the product cures/treats/heals anything. Also DO NOT mention any body parts (chest, arm, shoulder, muscle, back, leg, neck, waist, hip, glute, bicep, tricep, etc.) or exercise/fitness verbs (strengthen, tone, build, sculpt, burn, train, tighten, slim, firm, flex). These words trigger eBay's automated filter for fitness/sports categories. Instead describe: material, size, adjustability, durability, build quality. NO brand names, NO medical claims, NO URLs, plain text only, under 120 words.`;
+{"title":"rewritten title here","description":"full description with bullet points"}`;
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -241,23 +226,8 @@ async function addFixedPriceItem(product: {
   if (!aspects["Brand"] || aspects["Brand"].length === 0) aspects["Brand"] = ["Unbranded"];
   if (!aspects["MPN"]   || aspects["MPN"].length === 0)   aspects["MPN"]   = ["Does Not Apply"];
 
-  // ── Strip health claim VALUES from item specifics ────────────────────────────
-  // eBay error 240 can be triggered by aspect VALUES like "Theme: Healing",
-  // "Main Stone Treatment: Magnetic", "Features: Magnetic Therapy" even when
-  // the title and description are perfectly clean. Manual listings pass because
-  // the web UI doesn't run the same sync content filter.
-  const HEALTH_CLAIM_RE = /\b(heal\w*|therap\w*|cure[sd]?|wellness|gauss|magnetic|regulator|detox|energy|chakra|quantum|infrared|ionic)\b/gi;
-  for (const key of Object.keys(aspects)) {
-    const vals = aspects[key] as string[];
-    const cleaned = vals.map(v => v.replace(HEALTH_CLAIM_RE, "").replace(/\s{2,}/g, " ").trim()).filter(v => v.length > 0);
-    if (cleaned.length === 0) {
-      delete aspects[key];
-      console.log(`[publish] 🧹 Removed health-claim aspect: ${key} (was: ${JSON.stringify(vals)})`);
-    } else if (cleaned.join(",") !== vals.join(",")) {
-      aspects[key] = cleaned;
-      console.log(`[publish] 🧹 Cleaned aspect "${key}": ${JSON.stringify(vals)} → ${JSON.stringify(cleaned)}`);
-    }
-  }
+  // Note: we do NOT strip "magnetic", "healing" etc. from aspect values.
+  // Manual listings with these values work fine — the issue is elsewhere.
 
   const picturesXml = product.images.slice(0, 12).map(url => `<PictureURL>${escXml(url)}</PictureURL>`).join("");
   const conditionId = ({"New":"1000","New with tags":"1000","New with box":"1000","New without tags":"1500","Like New":"2500","Used":"3000"} as Record<string,string>)[product.condition] ?? "1000";
@@ -361,9 +331,12 @@ async function addFixedPriceItem(product: {
     .join("");
   // ── Sanitize description per eBay Trading API rules ─────────────────────────
   const stripProblematic = (text: string): string =>
+    // Remove HTML, non-ASCII, URLs, and genuinely prohibited content only
+    // Do NOT remove product feature words (magnetic, gauss, healing etc.) — manual listings
+    // with these words work fine. Over-stripping was causing empty descriptions.
     text.replace(/<[^>]+>/g, " ").replace(/https?:\/\/\S+/gi, "").replace(/[^\x20-\x7E]/g, "")
-        .replace(/\b(cure|treat|heal\w*|therap\w*|diagnos\w*|medic\w*|FDA|prescription|drug|narcotic|weapon|gun|ammo|counterfeit|replica|fake|copyright|trademark|brand|wellness|gauss|tesla|magnetic|regulator|detox|chakra|quantum|ionic|infrared)\b/gi, "")
-        .replace(/\b(sexy|adult|xxx|porn|nude|erotic|fetish|explicit)\b/gi, "")
+        .replace(/\b(cure|diagnos|prescription|narcotic|weapon|gun|ammo|counterfeit|replica|fake|copyright|trademark)\b/gi, "")
+        .replace(/\b(sexy|adult|xxx|porn|nude|erotic|fetish|explicit|bondage|penetrate|thrust)\b/gi, "")
         .replace(/\s{2,}/g, " ").trim();
 
   const strippedRawDesc = stripProblematic(product.description || "");
