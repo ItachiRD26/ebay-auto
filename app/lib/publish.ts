@@ -246,7 +246,7 @@ async function addFixedPriceItem(product: {
   // "Main Stone Treatment: Magnetic", "Features: Magnetic Therapy" even when
   // the title and description are perfectly clean. Manual listings pass because
   // the web UI doesn't run the same sync content filter.
-  const HEALTH_CLAIM_RE = /\b(heal\w*|therap\w*|cure[sd]?|wellness|gauss|magnetic therapy|regulator)\b/gi;
+  const HEALTH_CLAIM_RE = /\b(heal\w*|therap\w*|cure[sd]?|wellness|gauss|magnetic|regulator|detox|energy|chakra|quantum|infrared|ionic)\b/gi;
   for (const key of Object.keys(aspects)) {
     const vals = aspects[key] as string[];
     const cleaned = vals.map(v => v.replace(HEALTH_CLAIM_RE, "").replace(/\s{2,}/g, " ").trim()).filter(v => v.length > 0);
@@ -362,7 +362,7 @@ async function addFixedPriceItem(product: {
   // ── Sanitize description per eBay Trading API rules ─────────────────────────
   const stripProblematic = (text: string): string =>
     text.replace(/<[^>]+>/g, " ").replace(/https?:\/\/\S+/gi, "").replace(/[^\x20-\x7E]/g, "")
-        .replace(/\b(cure|treat|heal\w*|therap\w*|diagnos\w*|medic\w*|FDA|prescription|drug|narcotic|weapon|gun|ammo|counterfeit|replica|fake|copyright|trademark|brand|wellness|gauss|tesla|magnetic therapy|regulator)\b/gi, "")
+        .replace(/\b(cure|treat|heal\w*|therap\w*|diagnos\w*|medic\w*|FDA|prescription|drug|narcotic|weapon|gun|ammo|counterfeit|replica|fake|copyright|trademark|brand|wellness|gauss|tesla|magnetic|regulator|detox|chakra|quantum|ionic|infrared)\b/gi, "")
         .replace(/\b(sexy|adult|xxx|porn|nude|erotic|fetish|explicit)\b/gi, "")
         .replace(/\s{2,}/g, " ").trim();
 
@@ -583,12 +583,16 @@ export async function publishProductById(productId: string, userToken: string, u
     [/\bbody builder\b/gi,    "fitness trainer"],
     [/\btwister\b/gi,         "rotary exerciser"],  // Hasbro trademark — triggers brand violation
     // Health claim words — eBay API strictly prohibits these in titles/descriptions
-    [/\bmagnetic therapy\b/gi, "magnetic"],
-    [/\bhealing\b/gi,          ""],
-    [/\btherapy\b/gi,          ""],
-    [/\bwellness\b/gi,         ""],
-    [/\b\d+\s*gauss\b/gi,     ""],   // "3500 Gauss" = medical claim
-    [/\bregulator\b/gi,        ""],   // "Regulator" in health context
+    [/\bmagnetic therapy\b/gi,  ""],
+    [/\bmagnetic\b/gi,          ""],   // Copper+Magnetic = medical claim pattern eBay blocks
+    [/\bhealing\b/gi,           ""],
+    [/\btherapy\b/gi,           ""],
+    [/\bwellness\b/gi,          ""],
+    [/\b\d+\s*gauss\b/gi,      ""],   // "3500 Gauss" = medical claim
+    [/\bregulator\b/gi,         ""],   // "Regulator" in health context
+    [/\btherapeutic\b/gi,       ""],
+    [/\bdetox\b/gi,             ""],
+    [/\benergy\b/gi,            ""],   // "Energy bracelet" = health claim
   ];
   const preScreened = PRESCREEN.reduce((t, [p, r]) => t.replace(p, r), product.title as string).replace(/\s{2,}/g, " ").trim();
   if (preScreened !== product.title)
@@ -611,7 +615,7 @@ Rewrite the title using ONLY neutral, unambiguous, factual language. No words wi
 
 Product: "${strippedTitle}"
 
-NEVER USE: clip, clamp, chain, strip, hard, tight, drag, harem, sexy, nude, naked, whip, shock, prong, thrust, penetrate, bondage, fetish, restraint, screw, bang, male (for apparel), expander (use "exerciser" instead), twister (use "rotary exerciser"), puller, gripper-style names that sound adult
+NEVER USE: clip, clamp, chain, strip, hard, tight, drag, harem, sexy, nude, naked, whip, shock, prong, thrust, penetrate, bondage, fetish, restraint, screw, bang, male (for apparel), expander (use "exerciser" instead), twister (use "rotary exerciser"), healing, therapy, magnetic, wellness, gauss, therapeutic, detox, energy (health context), chakra, puller, gripper-style names that sound adult
 
 Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-3 factual sentences, professional, no brand names, no URLs"}`, 400);
     publishTitle = rewrite?.title ?? preScreened;
@@ -888,39 +892,43 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
       // typically has no seller restrictions.
       const stillImproper = msg2.includes("improper") || msg2.includes("not be permitted") || msg2.includes("policy");
       if (stillImproper) {
-        console.log(`[publish] 📂 Both attempts improper/not-permitted — trying fallback category`);
+        // ── Logic: if CN vendor published in refCategoryId, that category IS valid.
+        // Don't call resolveCategory (Taxonomy API gives absurd results for unusual titles
+        // e.g. "Gauss" → Gas Regulators, "Trainer" → Men's Sneakers).
+        // Just retry with the EXACT same CN category but stripped content.
+        console.log(`[publish] 📂 Both attempts blocked — retrying with CN category ${refCategoryId} + stripped aspects`);
         try {
-          // Use original product title for category resolution — not the Claude-rewritten publishTitle
-        // which might contain "Trainer" (mapped to footwear) or other misleading terms
-        const originalTitle = String(product.title ?? publishTitle);
-        const fallback = await resolveCategory(refCategoryId, originalTitle);
-        console.log(`[publish] 📂 Fallback resolving from original title: "${originalTitle.slice(0, 50)}"`);
-          // Only retry if resolveCategory found a DIFFERENT category
-          if (fallback.id !== refCategoryId) {
-            console.log(`[publish] 📂 Fallback category: ${refCategoryId} → ${fallback.id}`);
-            const result3 = await addFixedPriceItem({
-              title: publishTitle, description: publishDesc,
-              categoryId: fallback.id, price: product.suggestedSellingPrice,
-              stock: (product.stock ?? 10), images: refImages,
-              condition: product.condition ?? "New", aspects: publishAspects,
-              variations: refVariations, markupRatio, categoryType: fallback.type,
-              fulfillmentPolicyId: policies.fulfillmentPolicyId,
-              paymentPolicyId:     policies.paymentPolicyId,
-              returnPolicyId:      policies.returnPolicyId,
-              itemCountry:         policies.itemCountry,
-              itemLocation:        policies.itemLocation,
-            }, userToken);
-            itemId = result3.itemId;
-            console.log(`[publish] ✅ Publicado con categoría fallback — ID: ${itemId}`);
-          } else {
-            // resolveCategory returned same category — nothing else to try
-            throw new Error(msg2);
-          }
+          // Strip all aspects except the absolute minimum — reduces surface area for filter hits
+          const minimalAspects: Record<string, string[]> = {
+            Brand: ["Unbranded"],
+            MPN:   ["Does Not Apply"],
+          };
+          // Keep Color and Material if they exist and are clean
+          if (publishAspects["Color"])    minimalAspects["Color"]    = publishAspects["Color"];
+          if (publishAspects["Material"]) minimalAspects["Material"] = publishAspects["Material"];
+          if (publishAspects["Style"])    minimalAspects["Style"]    = publishAspects["Style"];
+          if (publishAspects["Type"])     minimalAspects["Type"]     = publishAspects["Type"];
+          if (publishAspects["Country/Region of Manufacture"]) minimalAspects["Country/Region of Manufacture"] = ["China"];
+
+          const result3 = await addFixedPriceItem({
+            title: publishTitle, description: publishDesc,
+            categoryId: refCategoryId,           // ← always use CN category, it's proven valid
+            price: product.suggestedSellingPrice,
+            stock: (product.stock ?? 10), images: refImages,
+            condition: product.condition ?? "New", aspects: minimalAspects,
+            variations: refVariations, markupRatio,
+            fulfillmentPolicyId: policies.fulfillmentPolicyId,
+            paymentPolicyId:     policies.paymentPolicyId,
+            returnPolicyId:      policies.returnPolicyId,
+            itemCountry:         policies.itemCountry,
+            itemLocation:        policies.itemLocation,
+          }, userToken);
+          itemId = result3.itemId;
+          console.log(`[publish] ✅ Publicado con CN category + minimal aspects — ID: ${itemId}`);
         } catch (err3: unknown) {
           const msg3 = String(err3 instanceof Error ? err3.message : err3);
-          console.log(`[publish] ❌ Fallback category also failed: ${msg3.slice(0, 80)}`);
-          // Mark as failed (not rejected) — might work once account gets category approval
-          const failReason = `eBay bloqueó el listing (posible restricción de categoría para cuenta nueva). Edita la categoría manualmente e intenta de nuevo. Error: ${msg3.slice(0, 300)}`;
+          console.log(`[publish] ❌ CN category + minimal aspects also failed: ${msg3.slice(0, 80)}`);
+          const failReason = `eBay bloqueó el listing en categoría del vendor CN (${refCategoryId}). El producto puede requerir aprobación de cuenta o tener restricciones de política. Error: ${msg3.slice(0, 300)}`;
           await docRef.update({ status: "failed", failReason, updatedAt: Date.now() });
           throw new Error(failReason);
         }
