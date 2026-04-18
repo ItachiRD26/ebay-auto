@@ -62,6 +62,7 @@ export default function Dashboard() {
   const [searchProgress, setSearchProgress] = useState<{
     reviewed: number; passed: number; keyword: string;
     keywords: { done: number; total: number };
+    phase2?:  { reviewed: number; total: number };
   } | null>(null);
 
   // ── Publish modal ────────────────────────────────────────────────────────────
@@ -836,10 +837,10 @@ export default function Dashboard() {
               <div style={{ flex: 1, display: "flex", gap: "1rem", flexWrap: "wrap" }}>
                 {searchProgress ? (
                   <>
-                    {searchProgress.keywords.done > 0 && <span>📋 <strong style={{ color: "var(--text)" }}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>}
+                    {searchProgress.keywords.total > 1 && <span>📋 <strong style={{ color: "var(--text)" }}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>}
                     {searchProgress.keyword && <span>🔍 <strong style={{ color: "var(--text)" }}>"{searchProgress.keyword}"</strong></span>}
-                    {searchProgress.keywords.total > 0 && (
-                      <span style={{ color: "var(--text3)" }}>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed}/{searchProgress.keywords.total}</strong></span>
+                    {((searchProgress as unknown as {phase2?:{total:number}}).phase2?.total ?? 0) > 0 && (
+                      <span>👁 <strong style={{ color: "var(--text)" }}>{(searchProgress as unknown as {phase2?:{reviewed:number}}).phase2?.reviewed ?? 0}/{(searchProgress as unknown as {phase2?:{total:number}}).phase2?.total ?? 0}</strong></span>
                     )}
                     <span style={{ color: "var(--green)" }}>✅ <strong>{searchProgress.passed}</strong></span>
                     {(searchProgress as unknown as Record<string,unknown>).skipReasons && (() => {

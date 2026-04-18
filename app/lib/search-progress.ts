@@ -6,7 +6,8 @@ export interface SearchProgress {
   passed:    number;
   published: number;
   failed:    number;
-  keywords:  { done: number; total: number };
+  keywords:  { done: number; total: number };  // auto-search keyword loop counter
+  phase2:    { reviewed: number; total: number }; // candidates being deep-evaluated
   skipReasons: {
     price:     number;
     banned:    number;
@@ -24,6 +25,7 @@ const EMPTY_PROGRESS = (): SearchProgress => ({
   active: false, keyword: "", reviewed: 0,
   passed: 0, published: 0, failed: 0,
   keywords: { done: 0, total: 0 },
+  phase2:   { reviewed: 0, total: 0 },
   skipReasons: { ...EMPTY_SKIPS },
   lastSkipReason: "",
 });
@@ -39,6 +41,7 @@ export function resetProgress(userId: string, totalKeywords: number) {
   _progressMap.set(userId, {
     active: true, keyword: "", reviewed: 0, passed: 0, published: 0, failed: 0,
     keywords: { done: 0, total: totalKeywords },
+    phase2:   { reviewed: 0, total: 0 },
     skipReasons: { ...EMPTY_SKIPS },
     lastSkipReason: "",
   });

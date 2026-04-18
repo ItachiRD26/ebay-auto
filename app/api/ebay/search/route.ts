@@ -544,9 +544,14 @@ export async function POST(req: NextRequest) {
     // Progress shows Phase 2 candidates only — Phase 1 is instant so no point showing it
     // totalKeywords=0 → hides the "12/112 keywords" counter (that's for auto-search loop)
     // We track phase2 progress via reviewed/total separately
-    resetProgress(userId, 0);
-    updateProgress(userId, { keyword: kw, reviewed: 0, passed: 0,
-      keywords: { done: 0, total: candidates.length } });
+    // Don't call resetProgress here — it would wipe the auto-search keywords counter
+    // Just reset phase2 and reviewed/passed for this keyword's evaluation
+    updateProgress(userId, {
+      keyword:  kw,
+      reviewed: 0,
+      passed:   0,
+      phase2:   { reviewed: 0, total: candidates.length },
+    });
 
     let totalAdded    = 0;
     let totalReviewed = 0;
@@ -560,7 +565,7 @@ export async function POST(req: NextRequest) {
       );
       if (productId) totalAdded++;
 
-      updateProgress(userId, { reviewed: totalReviewed, passed: totalAdded });
+      updateProgress(userId, { reviewed: totalReviewed, passed: totalAdded, phase2: { reviewed: totalReviewed, total: candidates.length } });
       await new Promise(r => setTimeout(r, 200));
     }
 
