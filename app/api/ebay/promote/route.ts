@@ -29,7 +29,19 @@ async function getOrCreateCampaign(token: string): Promise<string | null> {
   }
 
   // No active campaign — create one
+  // eBay requires startDate in ISO 8601 with time, and bidPercentage as string
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const createBody = {
+    campaignName: `DropFlow ${new Date().toISOString().slice(0, 10)}`,
+    campaignType: "COST_PER_SALE",
+    startDate: `${tomorrow}T00:00:00.000Z`,
+    fundingStrategy: {
+      biddingStrategy: "FIXED",
+      bidPercentage: "2.0",
+    },
+    marketplaceId: "EBAY_US",
+  };
+  console.log(`[promote] Creating campaign:`, JSON.stringify(createBody));
   const createRes = await fetch("https://api.ebay.com/sell/marketing/v1/ad_campaign", {
     method: "POST",
     headers: {
@@ -37,21 +49,24 @@ async function getOrCreateCampaign(token: string): Promise<string | null> {
       "Content-Type": "application/json",
       "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
     },
-    body: JSON.stringify({
-      campaignName: `DropFlow Auto Ads ${new Date().toISOString().slice(0, 10)}`,
-      campaignType: "COST_PER_SALE",
-      startDate: tomorrow,
-      fundingStrategy: {
-        biddingStrategy: "FIXED",
-        bidPercentage: "2.0",
-      },
-      marketplaceId: "EBAY_US",
-    }),
+    body: JSON.stringify(createBody),
   });
 
   if (!createRes.ok) {
     const err = await createRes.text();
-    console.error(`[promote] Failed to create campaign: ${createRes.status} ${err.slice(0, 200)}`);
+    console.error(`[promote] Failed to create campaign ${createRes.status}: ${err.slice(0, 500)}`);
+    // Fallback: use any existing campaign regardless of status
+    const anyRes = await fetch("https://api.ebay.com/sell/marketing/v1/ad_campaign?campaign_type=COST_PER_SALE&limit=10", {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
+    });
+    if (anyRes.ok) {
+      const anyData = await anyRes.json() as { campaigns?: { campaignId: string; campaignStatus: string }[] };
+      const any = anyData.campaigns?.[0];
+      if (any) {
+        console.log(`[promote] Using existing campaign (${any.campaignStatus}): ${any.campaignId}`);
+        return any.campaignId;
+      }
+    }
     return null;
   }
 

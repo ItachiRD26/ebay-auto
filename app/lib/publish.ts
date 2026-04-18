@@ -981,7 +981,7 @@ async function getOrCreateCampaignId(token: string, storeId: string): Promise<st
     const cr = await fetch("https://api.ebay.com/sell/marketing/v1/ad_campaign", {
       method: "POST", signal: AbortSignal.timeout(8000),
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
-      body: JSON.stringify({ campaignName: `DropFlow ${new Date().toISOString().slice(0,10)}`, campaignType: "COST_PER_SALE", startDate: tomorrow, fundingStrategy: { biddingStrategy: "FIXED", bidPercentage: "2.0" }, marketplaceId: "EBAY_US" }),
+      body: JSON.stringify({ campaignName: `DropFlow ${new Date().toISOString().slice(0,10)}`, campaignType: "COST_PER_SALE", startDate: `${tomorrow}T00:00:00.000Z`, fundingStrategy: { biddingStrategy: "FIXED", bidPercentage: "2.0" }, marketplaceId: "EBAY_US" }),
     });
     if (cr.ok || cr.status === 201) {
       const loc = cr.headers.get("Location") ?? "";
