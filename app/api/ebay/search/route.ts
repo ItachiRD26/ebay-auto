@@ -542,8 +542,11 @@ export async function POST(req: NextRequest) {
 
     // ── Phase 2: Deep evaluation for candidates only ─────────────────────────
     // Progress shows Phase 2 candidates only — Phase 1 is instant so no point showing it
-    resetProgress(userId, candidates.length);
-    updateProgress(userId, { keyword: kw, reviewed: 0, passed: 0 });
+    // totalKeywords=0 → hides the "12/112 keywords" counter (that's for auto-search loop)
+    // We track phase2 progress via reviewed/total separately
+    resetProgress(userId, 0);
+    updateProgress(userId, { keyword: kw, reviewed: 0, passed: 0,
+      keywords: { done: 0, total: candidates.length } });
 
     let totalAdded    = 0;
     let totalReviewed = 0;
