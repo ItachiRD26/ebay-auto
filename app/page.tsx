@@ -61,8 +61,9 @@ export default function Dashboard() {
   const currentSearchRef = useRef<{ index: number; keyword: string; total: number; storeId: string } | null>(null);
   const [searchProgress, setSearchProgress] = useState<{
     reviewed: number; passed: number; keyword: string;
-    keywords: { done: number; total: number };
-    phase2?:  { reviewed: number; total: number };
+    keywords:    { done: number; total: number };
+    phase2?:     { reviewed: number; total: number };
+    skipReasons?: { price: number; banned: number; country: number; sales: number; duplicate: number; condition: number };
   } | null>(null);
 
   // ── Publish modal ────────────────────────────────────────────────────────────
