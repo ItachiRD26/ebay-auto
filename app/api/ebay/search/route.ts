@@ -245,7 +245,21 @@ async function getItemDataViaTradingAPI(numericItemId: string, storeId: string):
     if (!_tokenCache[storeId] || Date.now() - _tokenCache[storeId].fetchedAt > 60_000) {
       try {
         _tokenCache[storeId] = { token: await getUserToken(storeId), fetchedAt: Date.now() };
-      } catch {
+      } catch (refreshErr) {
+        // getUserToken failed — refresh token is invalid or expired
+        // Set the expired flag so the search stops and alerts the user
+        const errMsg = refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+        console.error(`   [Trading] ⚠️ Token refresh failed for store ${storeId}: ${errMsg.slice(0, 100)}`);
+        _tokenExpiredStoreId = storeId;
+        _tokenExpiredAt      = Date.now();
+        delete _tokenCache[storeId];
+        try {
+          const { db } = await import("@/lib/firebase");
+          await db.collection("tokens").doc(storeId).update({
+            tokenExpiredAt: Date.now(),
+            tokenExpiredReason: `Refresh failed: ${errMsg.slice(0, 200)}`,
+          });
+        } catch { /* non-fatal */ }
         return empty;
       }
     }
@@ -562,6 +576,13 @@ export async function POST(req: NextRequest) {
     let totalReviewed = 0;
 
     for (const item of candidates) {
+      // Stop immediately if token expired mid-search
+      if (_tokenExpiredStoreId === storeId) {
+        console.warn(`[search] ⛔ Token expired mid-search — stopping Phase 2 for store ${storeId}`);
+        endProgress(userId);
+        break;
+      }
+
       totalReviewed++;
       const productId = await processCandidate(
         item, kw, storeId, userId,
