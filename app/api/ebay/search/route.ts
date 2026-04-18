@@ -565,7 +565,7 @@ export async function POST(req: NextRequest) {
       );
       if (productId) totalAdded++;
 
-      updateProgress(userId, { reviewed: totalReviewed, passed: totalAdded, phase2: { reviewed: totalReviewed, total: candidates.length } });
+      updateProgress(userId, { reviewed: allItems.length, passed: totalAdded, phase2: { reviewed: totalReviewed, total: candidates.length } });
       await new Promise(r => setTimeout(r, 200));
     }
 
