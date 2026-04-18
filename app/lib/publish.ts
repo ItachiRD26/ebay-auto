@@ -229,7 +229,11 @@ async function addFixedPriceItem(product: {
   // Note: we do NOT strip "magnetic", "healing" etc. from aspect values.
   // Manual listings with these values work fine — the issue is elsewhere.
 
-  const picturesXml = product.images.slice(0, 12).map(url => `<PictureURL>${escXml(url)}</PictureURL>`).join("");
+  // Filter images — prefer external over EPS (ebayimg.com) to avoid error 20004
+  const _ebayImgs    = product.images.filter(u => u.includes("ebayimg.com"));
+  const _externalImgs = product.images.filter(u => !u.includes("ebayimg.com"));
+  const _cleanImages  = _externalImgs.length > 0 ? _externalImgs : _ebayImgs;
+  const picturesXml = _cleanImages.slice(0, 12).map(url => `<PictureURL>${escXml(url)}</PictureURL>`).join("");
   const conditionId = ({"New":"1000","New with tags":"1000","New with box":"1000","New without tags":"1500","Like New":"2500","Used":"3000"} as Record<string,string>)[product.condition] ?? "1000";
   const markupRatio = product.markupRatio ?? 1.06;
   let variationsXml = "";
@@ -328,7 +332,13 @@ async function addFixedPriceItem(product: {
     const setXml = Object.entries(varData.specificsSet).map(([name, vals]) => { const valsXml = (vals as string[]).map((v: string) => `<Value>${escXml(v)}</Value>`).join(""); return `<NameValueList><Name>${escXml(name)}</Name>${valsXml}</NameValueList>`; }).join("");
     let picturesBlockXml = "";
     if (varData.pictureDimension && Object.keys(varData.picturesByVariant).length > 0) {
-      const pictureSets = Object.entries(varData.picturesByVariant).map(([value, urls]) => { const urlsXml = (urls as string[]).slice(0, 6).map((u: string) => `<PictureURL>${escXml(u)}</PictureURL>`).join(""); return `<VariationSpecificPictureSet><VariationSpecificValue>${escVal(value)}</VariationSpecificValue>${urlsXml}</VariationSpecificPictureSet>`; }).join("");
+      const pictureSets = Object.entries(varData.picturesByVariant).map(([value, urls]) => {
+        const extV  = (urls as string[]).filter(u => !u.includes("ebayimg.com"));
+        const ebayV = (urls as string[]).filter(u => u.includes("ebayimg.com"));
+        const cleanV = extV.length > 0 ? extV : ebayV;
+        const urlsXml = cleanV.slice(0, 6).map((u: string) => `<PictureURL>${escXml(u)}</PictureURL>`).join("");
+        return `<VariationSpecificPictureSet><VariationSpecificValue>${escVal(value)}</VariationSpecificValue>${urlsXml}</VariationSpecificPictureSet>`;
+      }).join("");
       picturesBlockXml = `<Pictures><VariationSpecificName>${escXml(varData.pictureDimension)}</VariationSpecificName>${pictureSets}</Pictures>`;
       console.log(`[publish] 🖼 Variation pictures mapped: ${Object.keys(varData.picturesByVariant).length} values for "${varData.pictureDimension}"`);
     }
@@ -536,7 +546,14 @@ export async function publishProductById(productId: string, userToken: string, u
       if (refData.categoryId) refCategoryId = refData.categoryId;
       const merged  = [...refImages];
       refData.imageUrls.forEach((u: string) => { if (!merged.includes(u)) merged.push(u); });
-      refImages     = merged.slice(0, 12);
+      // ── Prevent EPS/Self-Hosted mix (eBay error 20004) ──────────────────────
+      // i.ebayimg.com = eBay's EPS CDN belonging to the CN seller's account.
+      // If we mix EPS URLs with external URLs eBay blocks the listing.
+      // Strategy: prefer non-eBay URLs (external CDN). If ALL are eBay CDN, use those only.
+      const ebayUrls = merged.filter(u => u.includes("ebayimg.com"));
+      const externalUrls = merged.filter(u => !u.includes("ebayimg.com"));
+      const dedupedImages = externalUrls.length > 0 ? externalUrls : ebayUrls;
+      refImages = dedupedImages.slice(0, 12);
       refVariations = (refData as unknown as ReferenceItemData).variations ?? null;
 
       // Update real variation price range in Firestore for the product card
@@ -708,8 +725,6 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
       const lowerMsg = msg1.toLowerCase();
 
       // ── Pre-fill well-known always-fixed values without calling Claude ──────
-      // These are deterministic: Brand=Unbranded, Country=China, etc.
-      // Calling Claude for these wastes tokens and can hallucinate wrong values.
       if (lowerMsg.includes("brand")) {
         publishAspects["Brand"] = ["Unbranded"];
         console.log(`[publish] 🔧 Brand → "Unbranded" (no Claude needed)`);
@@ -722,9 +737,34 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
         publishAspects["Country of Origin"] = ["China"];
       }
 
+      // ── Smart mapping: "Exterior X" → derive from existing "X" aspect ────────
+      // eBay sometimes requires "Exterior Color" when it has "Color"/"Colour",
+      // or "Exterior Material" when it has "Material". Map them directly.
+      if (lowerMsg.includes("exterior color") || lowerMsg.includes("exterior colour")) {
+        const existing = publishAspects["Color"] ?? publishAspects["Colour"] ?? publishAspects["colour"] ?? publishAspects["color"];
+        publishAspects["Exterior Color"] = existing?.length ? existing : ["Multicolor"];
+        console.log(`[publish] 🔧 Exterior Color → ${JSON.stringify(publishAspects["Exterior Color"])}`);
+      }
+      if (lowerMsg.includes("exterior material")) {
+        const existing = publishAspects["Material"] ?? publishAspects["material"];
+        publishAspects["Exterior Material"] = existing?.length ? existing : ["Mixed Materials"];
+        console.log(`[publish] 🔧 Exterior Material → ${JSON.stringify(publishAspects["Exterior Material"])}`);
+      }
+      // Generic "Exterior X" — try to find matching non-exterior aspect
+      const exteriorMatch = lowerMsg.match(/exterior (\w+) is missing/);
+      if (exteriorMatch && !lowerMsg.includes("exterior color") && !lowerMsg.includes("exterior material")) {
+        const baseField = exteriorMatch[1]; // e.g. "finish", "lining", etc.
+        const baseKey = Object.keys(publishAspects).find(k => k.toLowerCase() === baseField);
+        if (baseKey) {
+          const extKey = `Exterior ${baseField.charAt(0).toUpperCase() + baseField.slice(1)}`;
+          publishAspects[extKey] = publishAspects[baseKey];
+          console.log(`[publish] 🔧 ${extKey} → copied from ${baseKey}`);
+        }
+      }
+
       // ── For other missing fields, ask Claude ─────────────────────────────────
-      // Only call Claude if eBay is asking for something we can't pre-fill
-      const knownFields = ["brand", "mpn", "country/region of manufacture", "country of origin"];
+      const knownFields = ["brand", "mpn", "country/region of manufacture", "country of origin",
+        "exterior color", "exterior colour", "exterior material"];
       const needsClaude = !knownFields.some(f => lowerMsg.includes(f));
       if (needsClaude) {
         const fix = await autoFixWithClaude(msg1, {
