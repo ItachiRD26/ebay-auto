@@ -838,7 +838,8 @@ export default function Dashboard() {
                   <>
                     {searchProgress.keywords.total > 1 && <span>📋 <strong style={{ color: "var(--text)" }}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>}
                     {searchProgress.keyword && <span>🔍 <strong style={{ color: "var(--text)" }}>"{searchProgress.keyword}"</strong></span>}
-                    <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed}</strong></span>
+                    <span style={{ color: "var(--text3)", fontSize: "0.72rem" }}>fase 2</span>
+                    <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed}/{searchProgress.keywords.total > 0 ? searchProgress.keywords.total : "?"}</strong></span>
                     <span style={{ color: "var(--green)" }}>✅ <strong>{searchProgress.passed}</strong></span>
                     {(searchProgress as unknown as Record<string,unknown>).skipReasons && (() => {
                       const sr = ((searchProgress as unknown as Record<string, Record<string,number>>).skipReasons);

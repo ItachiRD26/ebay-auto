@@ -541,12 +541,12 @@ export async function POST(req: NextRequest) {
     console.log(`   Phase 1: ${candidates.length} candidates (rejected ${phase1Rejected} without API calls)`);
 
     // ── Phase 2: Deep evaluation for candidates only ─────────────────────────
-    resetProgress(userId, allItems.length);
-    updateProgress(userId, { keyword: kw });
+    // Progress shows Phase 2 candidates only — Phase 1 is instant so no point showing it
+    resetProgress(userId, candidates.length);
+    updateProgress(userId, { keyword: kw, reviewed: 0, passed: 0 });
 
     let totalAdded    = 0;
     let totalReviewed = 0;
-    let totalSkipped  = phase1Rejected;  // count phase 1 rejects in skipped total
 
     for (const item of candidates) {
       totalReviewed++;
@@ -556,9 +556,8 @@ export async function POST(req: NextRequest) {
         appToken,
       );
       if (productId) totalAdded++;
-      else           totalSkipped++;
 
-      updateProgress(userId, { reviewed: totalReviewed + phase1Rejected, passed: totalAdded });
+      updateProgress(userId, { reviewed: totalReviewed, passed: totalAdded });
       await new Promise(r => setTimeout(r, 200));
     }
 
@@ -571,7 +570,7 @@ export async function POST(req: NextRequest) {
       published:  0,
       reviewed:   allItems.length,
       candidates: candidates.length,
-      skipped:    totalSkipped,
+      skipped:    allItems.length - totalAdded,
     });
 
   } catch (error: unknown) {
