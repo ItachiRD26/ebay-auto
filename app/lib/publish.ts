@@ -953,43 +953,70 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
 
   // ── Step 7: Promoted listings (2%) ───────────────────────────────────────
   try {
-    const promoted = await applyPromotedListing(itemId, userToken);
+    const promoted = await applyPromotedListing(itemId, userToken, storeId);
     if (promoted) await docRef.update({ bidPercentage: 2.0, updatedAt: Date.now() });
   } catch { /* non-fatal */ }
 
   return { listingId: itemId };
 }
 
-async function applyPromotedListing(listingId: string, userToken: string): Promise<boolean> {
+// ─── Marketing API: get or create a RUNNING cost-per-sale campaign ─────────────
+const _campaignCache: Record<string, { id: string; fetchedAt: number }> = {};
+
+async function getOrCreateCampaignId(token: string, storeId: string): Promise<string | null> {
+  const cached = _campaignCache[storeId];
+  if (cached && Date.now() - cached.fetchedAt < 60 * 60 * 1000) return cached.id;
   try {
-    const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials><Item><ItemID>${listingId}</ItemID><PromotedListingDetails><BidPercentage>2.0</BidPercentage><PromotionMethod>COST_PER_SALE</PromotionMethod></PromotedListingDetails></Item></ReviseFixedPriceItemRequest>`;
-    const https = await import("node:https");
-    return new Promise<boolean>((resolve) => {
-      const buf = Buffer.from(xml, "utf-8");
-      const req = https.request({
-        hostname: "api.ebay.com", path: "/ws/api.dll", method: "POST",
-        headers: { "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "967", "X-EBAY-API-CALL-NAME": "ReviseFixedPriceItem", "Content-Type": "text/xml", "Content-Length": buf.length.toString() }
-      }, (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => {
-          const body = Buffer.concat(chunks).toString("utf-8");
-          if (body.includes("<Ack>Failure</Ack>")) {
-            const m = body.match(/<LongMessage>(.*?)<\/LongMessage>/);
-            console.warn(`[promote] ⚠️ ${listingId}: ${m?.[1] ?? "Unknown error"}`);
-            resolve(false);
-          } else {
-            console.log(`[promote] ✅ 2% ad applied to ${listingId}`);
-            resolve(true);
-          }
-        });
-      });
-      req.on("error", (e) => { console.warn(`[promote] ⚠️ ${listingId}:`, e.message); resolve(false); });
-      req.setTimeout(15000, () => { req.destroy(); resolve(false); });
-      req.write(buf); req.end();
+    const res = await fetch(
+      "https://api.ebay.com/sell/marketing/v1/ad_campaign?campaign_type=COST_PER_SALE&limit=10",
+      { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" }, signal: AbortSignal.timeout(8000) }
+    );
+    if (res.ok) {
+      const data = await res.json() as { campaigns?: { campaignId: string; campaignStatus: string }[] };
+      const active = data.campaigns?.find(c => c.campaignStatus === "RUNNING");
+      if (active) { _campaignCache[storeId] = { id: active.campaignId, fetchedAt: Date.now() }; return active.campaignId; }
+    }
+    // No active campaign — create one
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const cr = await fetch("https://api.ebay.com/sell/marketing/v1/ad_campaign", {
+      method: "POST", signal: AbortSignal.timeout(8000),
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
+      body: JSON.stringify({ campaignName: `DropFlow ${new Date().toISOString().slice(0,10)}`, campaignType: "COST_PER_SALE", startDate: tomorrow, fundingStrategy: { biddingStrategy: "FIXED", bidPercentage: "2.0" }, marketplaceId: "EBAY_US" }),
     });
-    } catch (e) { console.warn(`[promote] ⚠️ Error for ${listingId}:`, e instanceof Error ? e.message : e); return false; }
+    if (cr.ok || cr.status === 201) {
+      const loc = cr.headers.get("Location") ?? "";
+      const id  = loc.split("/").pop() ?? "";
+      if (id) { _campaignCache[storeId] = { id, fetchedAt: Date.now() }; return id; }
+    }
+  } catch { /* non-fatal */ }
+  return null;
 }
+
+async function applyPromotedListing(listingId: string, userToken: string, storeId?: string): Promise<boolean> {
+  try {
+    const campaignId = await getOrCreateCampaignId(userToken, storeId ?? "default");
+    if (!campaignId) { console.warn(`[promote] No campaign available`); return false; }
+
+    const res = await fetch(
+      `https://api.ebay.com/sell/marketing/v1/ad_campaign/${campaignId}/bulk_create_ads_by_listing_id`,
+      {
+        method: "POST", signal: AbortSignal.timeout(10000),
+        headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/json", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
+        body: JSON.stringify({ requests: [{ listingId, bidPercentage: "2.0" }] }),
+      }
+    );
+    if (!res.ok) { console.warn(`[promote] ⚠️ ${listingId}: HTTP ${res.status}`); return false; }
+    const data = await res.json() as { responses?: { errors?: unknown[] }[] };
+    const r = data.responses?.[0];
+    if (r?.errors && (r.errors as unknown[]).length > 0) { console.warn(`[promote] ⚠️ ${listingId}:`, r.errors); return false; }
+    console.log(`[promote] ✅ 2% ad via Marketing API → ${listingId}`);
+    return true;
+  } catch (e) {
+    console.warn(`[promote] ⚠️ Error for ${listingId}:`, e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
 
 export async function markPublishFailed(productId: string, reason: string, userId: string): Promise<void> {
   const isTooManyVariants = reason.startsWith("TOO_MANY_VARIATIONS:");
