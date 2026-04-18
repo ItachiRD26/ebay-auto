@@ -289,6 +289,15 @@ async function getItemDataViaTradingAPI(numericItemId: string, storeId: string):
         _tokenExpiredStoreId = storeId;
         _tokenExpiredAt      = Date.now();
         delete _tokenCache[storeId]; // clear cached token
+        // Write to Firestore so serverless instances share the state
+        try {
+          const { db } = await import("@/lib/firebase");
+          await db.collection("tokens").doc(storeId).update({
+            tokenExpiredAt: Date.now(),
+            tokenExpiredReason: errMsg,
+          });
+          console.error(`   [Trading] ⚠️ Token expiry written to Firestore for store ${storeId}`);
+        } catch { /* non-fatal — in-memory fallback still works for same instance */ }
       } else {
         console.warn(`   [Trading] Error ${numericItemId}: ${errMsg}`);
       }

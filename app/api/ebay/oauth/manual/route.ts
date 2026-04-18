@@ -35,11 +35,13 @@ export async function POST(req: NextRequest) {
 
     // Token stored at root level keyed by storeId — accessible by server only
     await db.collection("tokens").doc(storeId).set({
-      access_token:  tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiresAt:     Date.now() + tokens.expires_in * 1000,
-      createdAt:     Date.now(),
+      access_token:       tokens.access_token,
+      refresh_token:      tokens.refresh_token,
+      expiresAt:          Date.now() + tokens.expires_in * 1000,
+      createdAt:          Date.now(),
       userId,
+      tokenExpiredAt:     null,    // clear any previous expiry flag
+      tokenExpiredReason: null,
     });
 
     // Mark store as connected in the USER'S subcollection
