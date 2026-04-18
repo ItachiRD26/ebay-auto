@@ -256,20 +256,13 @@ export default function Dashboard() {
         const res  = await fetch(`/api/ebay/search-status?userId=${uid}`);
         const data = await res.json();
         if (data.active) {
-          setSearchProgress(p => {
-            if (!p) return p;
-            const prevTotal = (p as unknown as {_totalPassed?: number})._totalPassed ?? 0;
-            const serverPassed = data.passed ?? 0;
-            // _totalPassed accumulates approved across all keywords
-            // data.passed resets each keyword — we add the delta each time
-            return {
-              ...p,
-              reviewed:      data.reviewed ?? p.reviewed,
-              passed:        prevTotal + serverPassed,
-              phase2:        data.phase2 ?? p.phase2,
-              _totalPassed:  prevTotal,  // keep base for next poll
-            } as typeof p;
-          });
+          setSearchProgress(p => p ? {
+            ...p,
+            reviewed: data.reviewed ?? p.reviewed,
+            // passed from server resets each keyword — page.tsx loop adds delta via _kwBase
+            passed:   ((p as unknown as {_kwBase?:number})._kwBase ?? 0) + (data.passed ?? 0),
+            phase2:   data.phase2   ?? p.phase2,
+          } as typeof p : p);
         }
       } catch {}
     }, 1500);
@@ -390,7 +383,7 @@ export default function Dashboard() {
         const kwRes = await fetch(`/api/ebay/search?userId=${uid}`);
         const { keywords: allKws } = await kwRes.json() as { keywords: string[] };
         const reversed = [...allKws].reverse();
-        setSearchProgress({ reviewed: 0, passed: 0, keyword: reversed[startIndex] ?? "", keywords: { done: startIndex, total: reversed.length }, phase2: { reviewed: 0, total: 0 }, _totalPassed: 0 } as unknown as typeof searchProgress);
+        setSearchProgress({ reviewed: 0, passed: 0, keyword: reversed[startIndex] ?? "", keywords: { done: startIndex, total: reversed.length }, phase2: { reviewed: 0, total: 0 }, _kwBase: 0 } as unknown as typeof searchProgress);
 
         for (let i = startIndex; i < reversed.length; i++) {
           const kw = reversed[i];
@@ -406,10 +399,10 @@ export default function Dashboard() {
           // Polling handles reviewed/passed in real-time — just track loop position
           setSearchProgress(p => {
             if (!p) return p;
-            const prev = (p as unknown as {_totalPassed?:number})._totalPassed ?? 0;
-            // When keyword advances, fold current passed into _totalPassed
+            // Save current passed total as _kwBase so the next keyword's
+            // server-reported passed (which resets to 0) gets added on top
             return { ...p, keyword: kw, keywords: { done: i, total: reversed.length },
-              passed: prev, _totalPassed: prev } as unknown as typeof p;
+              _kwBase: p.passed } as unknown as typeof p;
           });
           try {
             const sr = await fetch("/api/ebay/search", {
@@ -854,7 +847,7 @@ export default function Dashboard() {
                   <>
                     {searchProgress.keywords.total > 1 && <span>📋 <strong style={{ color: "var(--text)" }}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>}
                     {searchProgress.keyword && <span>🔍 <strong style={{ color: "var(--text)" }}>"{searchProgress.keyword}"</strong></span>}
-                    {searchProgress.reviewed > 0 && <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed.toLocaleString()}</strong></span>}
+                    {(searchProgress.reviewed > 0 || ((searchProgress as unknown as {phase2?:{total:number}}).phase2?.total ?? 0) > 0) && <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed.toLocaleString()}</strong></span>}
                     {(() => {
                       const p2 = (searchProgress as unknown as {phase2?:{reviewed:number;total:number}}).phase2;
                       if (!p2 || p2.total === 0) return null;

@@ -541,14 +541,11 @@ export async function POST(req: NextRequest) {
     console.log(`   Phase 1: ${candidates.length} candidates (rejected ${phase1Rejected} without API calls)`);
 
     // ── Phase 2: Deep evaluation for candidates only ─────────────────────────
-    // Progress shows Phase 2 candidates only — Phase 1 is instant so no point showing it
-    // totalKeywords=0 → hides the "12/112 keywords" counter (that's for auto-search loop)
-    // We track phase2 progress via reviewed/total separately
-    // Don't call resetProgress here — it would wipe the auto-search keywords counter
-    // Just reset phase2 and reviewed/passed for this keyword's evaluation
+    // Set reviewed=allItems.length BEFORE the loop so the first poll already shows
+    // the real scanned count and candidatos total, not 0/0
     updateProgress(userId, {
       keyword:  kw,
-      reviewed: 0,
+      reviewed: allItems.length,   // total scanned including phase1 rejects
       passed:   0,
       phase2:   { reviewed: 0, total: candidates.length },
     });
