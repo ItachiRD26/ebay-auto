@@ -254,8 +254,18 @@ export default function Dashboard() {
     if (!searching) { setSearchProgress(null); return; }
     const interval = setInterval(async () => {
       try {
-        const res  = await fetch(`/api/ebay/search-status?userId=${uid}`);
+        const res  = await fetch(`/api/ebay/search-status?userId=${uid}&storeId=${selectedStoreId}`);
         const data = await res.json();
+
+        // ── Token expired mid-search — pause immediately ──────────────────────
+        if (data.tokenExpired) {
+          setTokenExpiredStore(data.tokenExpired);
+          setPaused(true);
+          pauseRef.current = true;
+          toast("⚠️ Token eBay expiró — búsqueda pausada. Reconecta la tienda.", "err");
+          return;
+        }
+
         if (data.active) {
           setSearchProgress(p => {
             if (!p) return p;
@@ -280,7 +290,7 @@ export default function Dashboard() {
       } catch {}
     }, 1500);
     return () => clearInterval(interval);
-  }, [searching]);
+  }, [searching, selectedStoreId]);
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
   const uid = user?.uid ?? "";
