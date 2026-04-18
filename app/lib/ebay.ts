@@ -66,6 +66,8 @@ export async function getUserToken(storeId: string): Promise<string> {
         "https://api.ebay.com/oauth/api_scope/sell.account",
         "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
         "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+        "https://api.ebay.com/oauth/api_scope/sell.marketing",
+        "https://api.ebay.com/oauth/api_scope/sell.marketing.readonly",
       ].join(" ")),
     ].join("&"),
   });
