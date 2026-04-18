@@ -267,9 +267,10 @@ export default function Dashboard() {
             const newKwBase  = serverPassed < lastPassed ? kwBase + lastPassed : kwBase;
             return {
               ...p,
-              reviewed:    data.reviewed ?? p.reviewed,
+              reviewed:    data.reviewed    ?? p.reviewed,
               passed:      newKwBase + serverPassed,
-              phase2:      data.phase2 ?? p.phase2,
+              phase2:      data.phase2      ?? p.phase2,
+              skipReasons: data.skipReasons ?? p.skipReasons,
               _kwBase:     newKwBase,
               _lastPassed: serverPassed,
             } as typeof p;

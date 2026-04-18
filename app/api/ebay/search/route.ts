@@ -29,11 +29,11 @@ async function getUserSettings(userId: string): Promise<{ minSoldCount: number; 
     const snap = await settingsDoc(userId, "main").get();
     const data = snap.data() as Record<string, number> | undefined;
     return {
-      minSoldCount:  data?.minSoldCount  ?? 5,
-      minSold30d:    data?.minSold30d    ?? 3,
+      minSoldCount:  data?.minSoldCount  ?? 3,   // lowered: 3 total sales = real demand signal
+      minSold30d:    data?.minSold30d    ?? 1,   // lowered: 1/month enough if Insights API is down
       defaultStock:  data?.defaultStock  ?? 10,
     };
-  } catch { return { minSoldCount: 5, minSold30d: 3, defaultStock: 10 }; }
+  } catch { return { minSoldCount: 3, minSold30d: 1, defaultStock: 10 }; }
 }
 
 async function getKeywords(userId: string): Promise<{ auto: string[]; excluded: string[] }> {
@@ -429,11 +429,11 @@ async function processCandidate(
   console.log(`      Ventas: ${td.soldCount} total | ~${td.estimatedSold30d} est/30d | listing: ${ageLabel} | ID:${numericId}`);
 
   if (td.soldCount < minSoldTotal) {
-    skipProgress(userId, "sales", `${td.soldCount} sold < ${minSoldTotal} min`);
+    skipProgress(userId, "sales", `${td.soldCount}total<${minSoldTotal}`);
     return false;
   }
   if (td.estimatedSold30d < minSold30d) {
-    skipProgress(userId, "sales", `~${td.estimatedSold30d}/30d < ${minSold30d} min`);
+    skipProgress(userId, "sales", `${td.estimatedSold30d}/30d<${minSold30d}`);
     return false;
   }
 
