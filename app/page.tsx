@@ -256,13 +256,24 @@ export default function Dashboard() {
         const res  = await fetch(`/api/ebay/search-status?userId=${uid}`);
         const data = await res.json();
         if (data.active) {
-          setSearchProgress(p => p ? {
-            ...p,
-            reviewed: data.reviewed ?? p.reviewed,
-            // passed from server resets each keyword — page.tsx loop adds delta via _kwBase
-            passed:   ((p as unknown as {_kwBase?:number})._kwBase ?? 0) + (data.passed ?? 0),
-            phase2:   data.phase2   ?? p.phase2,
-          } as typeof p : p);
+          setSearchProgress(p => {
+            if (!p) return p;
+            const sp = p as unknown as Record<string, unknown>;
+            const kwBase     = (sp._kwBase     as number) ?? 0;
+            const lastPassed = (sp._lastPassed as number) ?? 0;
+            const serverPassed = data.passed ?? 0;
+            // If server passed went DOWN (new keyword started, reset to 0),
+            // fold lastPassed into _kwBase accumulator
+            const newKwBase  = serverPassed < lastPassed ? kwBase + lastPassed : kwBase;
+            return {
+              ...p,
+              reviewed:    data.reviewed ?? p.reviewed,
+              passed:      newKwBase + serverPassed,
+              phase2:      data.phase2 ?? p.phase2,
+              _kwBase:     newKwBase,
+              _lastPassed: serverPassed,
+            } as typeof p;
+          });
         }
       } catch {}
     }, 1500);
@@ -383,7 +394,7 @@ export default function Dashboard() {
         const kwRes = await fetch(`/api/ebay/search?userId=${uid}`);
         const { keywords: allKws } = await kwRes.json() as { keywords: string[] };
         const reversed = [...allKws].reverse();
-        setSearchProgress({ reviewed: 0, passed: 0, keyword: reversed[startIndex] ?? "", keywords: { done: startIndex, total: reversed.length }, phase2: { reviewed: 0, total: 0 }, _kwBase: 0 } as unknown as typeof searchProgress);
+        setSearchProgress({ reviewed: 0, passed: 0, keyword: reversed[startIndex] ?? "", keywords: { done: startIndex, total: reversed.length }, phase2: { reviewed: 0, total: 0 }, _kwBase: 0, _lastPassed: 0 } as unknown as typeof searchProgress);
 
         for (let i = startIndex; i < reversed.length; i++) {
           const kw = reversed[i];
@@ -397,13 +408,7 @@ export default function Dashboard() {
           while (pauseRef.current) await new Promise(r => setTimeout(r, 500));
 
           // Polling handles reviewed/passed in real-time — just track loop position
-          setSearchProgress(p => {
-            if (!p) return p;
-            // Save current passed total as _kwBase so the next keyword's
-            // server-reported passed (which resets to 0) gets added on top
-            return { ...p, keyword: kw, keywords: { done: i, total: reversed.length },
-              _kwBase: p.passed } as unknown as typeof p;
-          });
+          setSearchProgress(p => p ? { ...p, keyword: kw, keywords: { done: i, total: reversed.length } } as typeof p : p);
           try {
             const sr = await fetch("/api/ebay/search", {
               method: "POST",
@@ -428,7 +433,7 @@ export default function Dashboard() {
       } else if (searchMode === "keyword") {
         if (!kwInput.trim()) { toast("Type a keyword first", "err"); return; }
         // Show progress for single keyword search
-        setSearchProgress({ reviewed: 0, passed: 0, keyword: kwInput.trim(), keywords: { done: 0, total: 1 } });
+        setSearchProgress({ reviewed: 0, passed: 0, keyword: kwInput.trim(), keywords: { done: 0, total: 1 }, phase2: { reviewed: 0, total: 0 }, _kwBase: 0, _lastPassed: 0 } as unknown as typeof searchProgress);
         const sr = await fetch("/api/ebay/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

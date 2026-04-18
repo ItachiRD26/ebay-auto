@@ -541,13 +541,12 @@ export async function POST(req: NextRequest) {
     console.log(`   Phase 1: ${candidates.length} candidates (rejected ${phase1Rejected} without API calls)`);
 
     // ── Phase 2: Deep evaluation for candidates only ─────────────────────────
-    // Set reviewed=allItems.length BEFORE the loop so the first poll already shows
-    // the real scanned count and candidatos total, not 0/0
+    // Reset per-keyword counters, keep keywords counter intact
     updateProgress(userId, {
-      keyword:  kw,
-      reviewed: allItems.length,   // total scanned including phase1 rejects
-      passed:   0,
-      phase2:   { reviewed: 0, total: candidates.length },
+      keyword: kw,
+      reviewed: allItems.length,  // show total scanned (phase1 + phase2) immediately
+      passed: 0,
+      phase2: { reviewed: 0, total: candidates.length },
     });
 
     let totalAdded    = 0;
@@ -562,7 +561,12 @@ export async function POST(req: NextRequest) {
       );
       if (productId) totalAdded++;
 
-      updateProgress(userId, { reviewed: allItems.length, passed: totalAdded, phase2: { reviewed: totalReviewed, total: candidates.length } });
+      // Update every item so polling always has fresh data
+      updateProgress(userId, {
+        reviewed: allItems.length,
+        passed:   totalAdded,
+        phase2:   { reviewed: totalReviewed, total: candidates.length },
+      });
       await new Promise(r => setTimeout(r, 200));
     }
 
