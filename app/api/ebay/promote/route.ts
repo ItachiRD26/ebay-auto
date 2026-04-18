@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, COLLECTIONS, queueCol } from "@/lib/firebase";
+import { getUserToken } from "@/lib/ebay";
 
 export async function POST(req: NextRequest) {
   try {
@@ -7,9 +8,9 @@ export async function POST(req: NextRequest) {
     if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
     if (!storeId) return NextResponse.json({ error: "storeId required" }, { status: 400 });
 
-    const tokenDoc = await db.collection("tokens").doc(storeId).get();
-    if (!tokenDoc.exists) return NextResponse.json({ error: "No token" }, { status: 401 });
-    const userToken = tokenDoc.data()!.access_token;
+    let userToken: string;
+    try { userToken = await getUserToken(storeId); }
+    catch { return NextResponse.json({ error: "No token or token expired — reconnect your store" }, { status: 401 }); }
 
     // Get all published products for this store
     const snap = await queueCol(userId)
@@ -55,10 +56,17 @@ export async function POST(req: NextRequest) {
           res.on("end", () => {
             const body = Buffer.concat(chunks).toString("utf-8");
             if (body.includes("<Ack>Failure</Ack>")) {
+              const errCode = body.match(/<ErrorCode>(\d+)<\/ErrorCode>/)?.[1] ?? "?";
               const m = body.match(/<LongMessage>(.*?)<\/LongMessage>/);
-              resolve({ ok: false, error: m?.[1] ?? "Unknown error" });
-            } else {
+              const errMsg = m?.[1] ?? "Unknown error";
+              console.warn(`[promote] ❌ ${listingId} [${errCode}]: ${errMsg.slice(0, 120)}`);
+              resolve({ ok: false, error: `[${errCode}] ${errMsg}` });
+            } else if (body.includes("<Ack>Success</Ack>") || body.includes("<Ack>Warning</Ack>")) {
+              console.log(`[promote] ✅ ${listingId} — 2% ad applied`);
               resolve({ ok: true });
+            } else {
+              console.warn(`[promote] ⚠️ ${listingId} unexpected response: ${body.slice(0, 200)}`);
+              resolve({ ok: false, error: "Unexpected response" });
             }
           });
         });
@@ -68,13 +76,25 @@ export async function POST(req: NextRequest) {
       });
 
     let success = 0, failed = 0;
+    const updateBatch = db.batch();
+    let batchOps = 0;
     for (const p of products) {
       const result = await revise(p.listingId!);
-      if (result.ok) success++;
-      else failed++;
-      await new Promise(r => setTimeout(r, 500));
+      if (result.ok) {
+        success++;
+        // Save bidPercentage so card shows "📢 2%" badge
+        updateBatch.update(queueCol(userId).doc(p.id), { bidPercentage: 2.0, updatedAt: Date.now() });
+        batchOps++;
+        if (batchOps >= 400) {
+          await updateBatch.commit();
+          batchOps = 0;
+        }
+      } else failed++;
+      await new Promise(r => setTimeout(r, 300));
     }
+    if (batchOps > 0) await updateBatch.commit();
 
+    console.log(`[promote] ✅ Done: ${success} ok, ${failed} failed`);
     return NextResponse.json({ success: true, updated: success, failed });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });

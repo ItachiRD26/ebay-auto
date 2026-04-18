@@ -953,17 +953,18 @@ Return ONLY JSON: {"title":"fresh retail title","description":"2-3 sentence desc
 
   // ── Step 7: Promoted listings (2%) ───────────────────────────────────────
   try {
-    await applyPromotedListing(itemId, userToken);
+    const promoted = await applyPromotedListing(itemId, userToken);
+    if (promoted) await docRef.update({ bidPercentage: 2.0, updatedAt: Date.now() });
   } catch { /* non-fatal */ }
 
   return { listingId: itemId };
 }
 
-async function applyPromotedListing(listingId: string, userToken: string): Promise<void> {
+async function applyPromotedListing(listingId: string, userToken: string): Promise<boolean> {
   try {
     const xml = `<?xml version="1.0" encoding="utf-8"?><ReviseFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials><Item><ItemID>${listingId}</ItemID><PromotedListingDetails><BidPercentage>2.0</BidPercentage><PromotionMethod>COST_PER_SALE</PromotionMethod></PromotedListingDetails></Item></ReviseFixedPriceItemRequest>`;
     const https = await import("node:https");
-    await new Promise<void>((resolve) => {
+    return new Promise<boolean>((resolve) => {
       const buf = Buffer.from(xml, "utf-8");
       const req = https.request({
         hostname: "api.ebay.com", path: "/ws/api.dll", method: "POST",
@@ -976,17 +977,18 @@ async function applyPromotedListing(listingId: string, userToken: string): Promi
           if (body.includes("<Ack>Failure</Ack>")) {
             const m = body.match(/<LongMessage>(.*?)<\/LongMessage>/);
             console.warn(`[promote] ⚠️ ${listingId}: ${m?.[1] ?? "Unknown error"}`);
+            resolve(false);
           } else {
             console.log(`[promote] ✅ 2% ad applied to ${listingId}`);
+            resolve(true);
           }
-          resolve();
         });
       });
-      req.on("error", (e) => { console.warn(`[promote] ⚠️ ${listingId}:`, e.message); resolve(); });
-      req.setTimeout(15000, () => { req.destroy(); resolve(); });
+      req.on("error", (e) => { console.warn(`[promote] ⚠️ ${listingId}:`, e.message); resolve(false); });
+      req.setTimeout(15000, () => { req.destroy(); resolve(false); });
       req.write(buf); req.end();
     });
-  } catch (e) { console.warn(`[promote] ⚠️ Error for ${listingId}:`, e instanceof Error ? e.message : e); }
+    } catch (e) { console.warn(`[promote] ⚠️ Error for ${listingId}:`, e instanceof Error ? e.message : e); return false; }
 }
 
 export async function markPublishFailed(productId: string, reason: string, userId: string): Promise<void> {
