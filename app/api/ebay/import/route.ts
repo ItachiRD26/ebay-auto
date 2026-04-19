@@ -140,17 +140,37 @@ async function fetchEbayItem(
     const groupData = await res2.json() as { items?: Record<string, unknown>[] };
     const items = groupData.items ?? [];
     if (items.length > 0) {
-      // Collect unique images from ALL variants
-      const allImageUrls = new Set<string>();
-      for (const variant of items) {
-        const main = (variant.image as { imageUrl?: string })?.imageUrl;
-        if (main) allImageUrls.add(main);
-        for (const img of (variant.additionalImages as { imageUrl: string }[] ?? [])) {
-          if (img.imageUrl) allImageUrls.add(img.imageUrl);
+      // Main images: additionalImages of first item (product-level shots, not variant-specific)
+      // Variant images: image of each variant (the per-variant thumbnail)
+      const mainImages: string[] = [];
+      const variantImages: string[] = [];
+      const seen = new Set<string>();
+
+      // First item's additionalImages = the "main" product gallery (non-variant shots)
+      const firstAdditional = (items[0].additionalImages as { imageUrl: string }[] ?? []);
+      for (const img of firstAdditional) {
+        if (img.imageUrl && !seen.has(img.imageUrl)) {
+          mainImages.push(img.imageUrl);
+          seen.add(img.imageUrl);
         }
       }
-      // Return first item but with merged images from all variants
-      const firstItem = { ...items[0], _allImages: Array.from(allImageUrls) };
+
+      // Each variant's main image = per-variant shot (goes after main images)
+      for (const variant of items) {
+        const varImg = (variant.image as { imageUrl?: string })?.imageUrl;
+        if (varImg && !seen.has(varImg)) {
+          variantImages.push(varImg);
+          seen.add(varImg);
+        }
+      }
+
+      // Main product image (first item) goes first
+      const firstMain = (items[0].image as { imageUrl?: string })?.imageUrl;
+      const allImages: string[] = [];
+      if (firstMain) { allImages.push(firstMain); seen.delete(firstMain); }
+      allImages.push(...mainImages, ...variantImages);
+
+      const firstItem = { ...items[0], _allImages: allImages.slice(0, 12) };
       return { item: firstItem, error: null };
     }
   }
