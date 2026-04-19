@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAppToken } from "@/lib/ebay";
+import { getAppToken, getUserToken } from "@/lib/ebay";
 import { db, queueCol, settingsDoc as getSettingsDoc, DEFAULT_SETTINGS, COLLECTIONS } from "@/lib/firebase"; // DEFAULT_SETTINGS includes minSold30d
 import { QueueProduct, Settings } from "@/types";
 
@@ -102,88 +102,51 @@ function extractItemId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-// ─── Fetch item from Browse API, trying multiple ID formats ──────────────────
-// eBay Browse API can return 404 for some items when using v1|id|0 format:
-//   - Item group listings (variations): need get_items_by_item_group
-//   - Ended or removed listings
-//   - Some legacy item formats
-// We try formats in order and return the first success.
+// ─── Fetch item metadata from Browse API ─────────────────────────────────────
 async function fetchEbayItem(
   itemId: string,
   token: string
 ): Promise<{ item: Record<string, unknown> | null; error: string | null }> {
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-    "Content-Type": "application/json",
-  };
+  const headers = { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US", "Content-Type": "application/json" };
 
-  // Format 1: Standard single item
-  const res1 = await fetch(
-    `https://api.ebay.com/buy/browse/v1/item/v1|${itemId}|0`,
-    { headers, signal: AbortSignal.timeout(10000) }
-  );
-  if (res1.ok) {
-    const data = await res1.json() as Record<string, unknown>;
-    return { item: data, error: null };
-  }
+  const res1 = await fetch(`https://api.ebay.com/buy/browse/v1/item/v1|${itemId}|0`, { headers, signal: AbortSignal.timeout(10000) });
+  if (res1.ok) return { item: await res1.json() as Record<string, unknown>, error: null };
 
   const errBody = await res1.text();
 
-    // Format 2: Try item group (variations) — collect ALL images from ALL variants
-  // then return first item enriched with all images
-  const res2 = await fetch(
-    `https://api.ebay.com/buy/browse/v1/item/get_items_by_item_group?item_group_id=${itemId}`,
-    { headers, signal: AbortSignal.timeout(10000) }
-  );
+  const res2 = await fetch(`https://api.ebay.com/buy/browse/v1/item/get_items_by_item_group?item_group_id=${itemId}`, { headers, signal: AbortSignal.timeout(10000) });
   if (res2.ok) {
     const groupData = await res2.json() as { items?: Record<string, unknown>[] };
-    const items = groupData.items ?? [];
-    if (items.length > 0) {
-      // Main images: additionalImages of first item (product-level shots, not variant-specific)
-      // Variant images: image of each variant (the per-variant thumbnail)
-      const mainImages: string[] = [];
-      const variantImages: string[] = [];
-      const seen = new Set<string>();
+    const first = groupData.items?.[0];
+    if (first) return { item: first, error: null };
+  }
 
-      // First item's additionalImages = the "main" product gallery (non-variant shots)
-      const firstAdditional = (items[0].additionalImages as { imageUrl: string }[] ?? []);
-      for (const img of firstAdditional) {
-        if (img.imageUrl && !seen.has(img.imageUrl)) {
-          mainImages.push(img.imageUrl);
-          seen.add(img.imageUrl);
-        }
-      }
+  return { item: null, error: `HTTP ${res1.status}: ${errBody.slice(0, 150)}` };
+}
 
-      // Each variant's main image = per-variant shot (goes after main images)
-      for (const variant of items) {
-        const varImg = (variant.image as { imageUrl?: string })?.imageUrl;
-        if (varImg && !seen.has(varImg)) {
-          variantImages.push(varImg);
-          seen.add(varImg);
-        }
-      }
-
-      // Main product image (first item) goes first
-      const firstMain = (items[0].image as { imageUrl?: string })?.imageUrl;
-      const allImages: string[] = [];
-      if (firstMain) { allImages.push(firstMain); seen.delete(firstMain); }
-      allImages.push(...mainImages, ...variantImages);
-
-      const firstItem = { ...items[0], _allImages: allImages.slice(0, 12) };
-      return { item: firstItem, error: null };
+// ─── Fetch images via Trading API GetItem — same logic as publish/search ──────
+// Trading API returns PictureURL in correct order: main gallery first, variant pics after.
+// This is exactly what getReferenceItemData uses — recycling proven logic.
+async function fetchItemImages(itemId: string, userToken: string): Promise<string[]> {
+  try {
+    const xml = `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><RequesterCredentials><eBayAuthToken>${userToken}</eBayAuthToken></RequesterCredentials><ItemID>${itemId}</ItemID><DetailLevel>ItemReturnDescription</DetailLevel></GetItemRequest>`;
+    const res = await fetch("https://api.ebay.com/ws/api.dll", {
+      method: "POST",
+      headers: { "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "967", "X-EBAY-API-CALL-NAME": "GetItem", "Content-Type": "text/xml" },
+      body: xml, signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+    const text = await res.text();
+    if (text.includes("<Ack>Failure</Ack>")) return [];
+    const urls: string[] = [];
+    const regex = /<PictureURL>(https?:\/\/[^<]+)<\/PictureURL>/g;
+    let m;
+    while ((m = regex.exec(text)) !== null) {
+      if (!urls.includes(m[1])) urls.push(m[1]);
     }
-  }
-
-  if (res1.ok) {
-    // Standard single item was ok — already returned above, this handles non-404 errors
-  }
-
-  // Both failed
-  return {
-    item: null,
-    error: `HTTP ${res1.status}: ${errBody.slice(0, 150)}`,
-  };
+    console.log(`[import] Trading API images for ${itemId}: ${urls.length} found`);
+    return urls;
+  } catch { return []; }
 }
 
 export async function POST(req: NextRequest) {
@@ -196,6 +159,8 @@ export async function POST(req: NextRequest) {
     if (!userId)  return NextResponse.json({ error: "userId required" },  { status: 400 });
 
     const token = await getAppToken();
+    let userToken: string | null = null;
+    try { userToken = await getUserToken(storeId); } catch { /* optional — Browse API works without it */ }
 
     const settingsSnap = await getSettingsDoc(userId, "main").get();
     const settings = {
@@ -291,12 +256,13 @@ export async function POST(req: NextRequest) {
         const totalMarketCost        = parseFloat((price + ebayShippingCost).toFixed(2));
         const suggestedSellingPrice  = parseFloat((totalMarketCost * (1 + markupPercent / 100)).toFixed(2));
 
-        // ── Images ─────────────────────────────────────────────────────────────
-        // _allImages is set by get_items_by_item_group path — contains all variant pics
-        const images: string[] = [];
-        if (Array.isArray(item._allImages) && (item._allImages as string[]).length > 0) {
-          images.push(...(item._allImages as string[]).slice(0, 12));
-        } else {
+        // ── Images — Trading API first (same logic as publish/search), Browse fallback
+        let images: string[] = [];
+        if (userToken) {
+          images = await fetchItemImages(itemId, userToken);
+        }
+        // Fallback to Browse API if Trading API failed or no user token
+        if (images.length === 0) {
           if ((item.image as { imageUrl?: string })?.imageUrl) {
             images.push((item.image as { imageUrl: string }).imageUrl);
           }
