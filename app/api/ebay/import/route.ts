@@ -130,17 +130,33 @@ async function fetchEbayItem(
 
   const errBody = await res1.text();
 
-  // Format 2: If it's an item group (variations), fetch by group and take first item
-  if (res1.status === 404 || res1.status === 400) {
-    const res2 = await fetch(
-      `https://api.ebay.com/buy/browse/v1/item/get_items_by_item_group?item_group_id=${itemId}`,
-      { headers, signal: AbortSignal.timeout(10000) }
-    );
-    if (res2.ok) {
-      const groupData = await res2.json() as { items?: Record<string, unknown>[] };
-      const firstItem = groupData.items?.[0];
-      if (firstItem) return { item: firstItem, error: null };
+    // Format 2: Try item group (variations) — collect ALL images from ALL variants
+  // then return first item enriched with all images
+  const res2 = await fetch(
+    `https://api.ebay.com/buy/browse/v1/item/get_items_by_item_group?item_group_id=${itemId}`,
+    { headers, signal: AbortSignal.timeout(10000) }
+  );
+  if (res2.ok) {
+    const groupData = await res2.json() as { items?: Record<string, unknown>[] };
+    const items = groupData.items ?? [];
+    if (items.length > 0) {
+      // Collect unique images from ALL variants
+      const allImageUrls = new Set<string>();
+      for (const variant of items) {
+        const main = (variant.image as { imageUrl?: string })?.imageUrl;
+        if (main) allImageUrls.add(main);
+        for (const img of (variant.additionalImages as { imageUrl: string }[] ?? [])) {
+          if (img.imageUrl) allImageUrls.add(img.imageUrl);
+        }
+      }
+      // Return first item but with merged images from all variants
+      const firstItem = { ...items[0], _allImages: Array.from(allImageUrls) };
+      return { item: firstItem, error: null };
     }
+  }
+
+  if (res1.ok) {
+    // Standard single item was ok — already returned above, this handles non-404 errors
   }
 
   // Both failed
@@ -227,21 +243,9 @@ export async function POST(req: NextRequest) {
 
         console.log(`[import] ${itemId} — "${title.slice(0, 50)}" $${price} ${condition}`);
 
-        // ── Filters ────────────────────────────────────────────────────────────
-        if (price < minPrice || price > maxPrice) {
-          const msg = `"${title.slice(0,50)}" — precio $${price} fuera de rango $${minPrice}-$${maxPrice}`;
-          results.filtered++;
-          results.filterLog.push(msg);
-          console.log(`[import] FILTRADO: ${msg}`);
-          continue;
-        }
-        if (onlyNewCondition && condition && !condition.toLowerCase().includes("new")) {
-          const msg = `"${title.slice(0,50)}" — condición "${condition}" (solo New)`;
-          results.filtered++;
-          results.filterLog.push(msg);
-          console.log(`[import] FILTRADO: ${msg}`);
-          continue;
-        }
+        // ── Filters — intentionally minimal for URL import ─────────────────────
+        // The user explicitly chose this URL — don't reject based on price or condition.
+        // Only block hard IP violations (brands, adult content).
         if (isBannedProduct(title, categoryId)) {
           const msg = `"${title.slice(0,50)}" — keyword/categoría bloqueada`;
           results.filtered++;
@@ -268,14 +272,19 @@ export async function POST(req: NextRequest) {
         const suggestedSellingPrice  = parseFloat((totalMarketCost * (1 + markupPercent / 100)).toFixed(2));
 
         // ── Images ─────────────────────────────────────────────────────────────
+        // _allImages is set by get_items_by_item_group path — contains all variant pics
         const images: string[] = [];
-        if ((item.image as { imageUrl?: string })?.imageUrl) {
-          images.push((item.image as { imageUrl: string }).imageUrl);
-        }
-        if (item.additionalImages) {
-          (item.additionalImages as { imageUrl: string }[]).forEach((img) => {
-            if (!images.includes(img.imageUrl)) images.push(img.imageUrl);
-          });
+        if (Array.isArray(item._allImages) && (item._allImages as string[]).length > 0) {
+          images.push(...(item._allImages as string[]).slice(0, 12));
+        } else {
+          if ((item.image as { imageUrl?: string })?.imageUrl) {
+            images.push((item.image as { imageUrl: string }).imageUrl);
+          }
+          if (item.additionalImages) {
+            (item.additionalImages as { imageUrl: string }[]).forEach((img) => {
+              if (!images.includes(img.imageUrl)) images.push(img.imageUrl);
+            });
+          }
         }
 
         // ── Save ───────────────────────────────────────────────────────────────
