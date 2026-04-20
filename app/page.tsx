@@ -257,13 +257,15 @@ export default function Dashboard() {
         const res  = await fetch(`/api/ebay/search-status?userId=${uid}&storeId=${selectedStoreId}`);
         const data = await res.json();
 
-        // ── Token expired mid-search — pause immediately ──────────────────────
         if (data.tokenExpired) {
           setTokenExpiredStore(data.tokenExpired);
           setPaused(true);
           pauseRef.current = true;
           toast("⚠️ Token eBay expiró — búsqueda pausada. Reconecta la tienda.", "err");
           return;
+        } else if (!data.tokenExpired && data.active === false) {
+          // Token was cleared (user reconnected) — auto-clear the banner
+          setTokenExpiredStore(null);
         }
 
         if (data.active) {
@@ -916,7 +918,13 @@ export default function Dashboard() {
                 🔗 Reconnect
               </button>
               <button
-                onClick={() => setTokenExpiredStore(null)}
+                onClick={async () => {
+                  // Clear Firestore flag so polling stops reporting expired
+                  await fetch(`/api/ebay/search-status?storeId=${tokenExpiredStore}`, { method: "DELETE" }).catch(() => {});
+                  setTokenExpiredStore(null);
+                  setPaused(false);
+                  pauseRef.current = false;
+                }}
                 style={{ padding: "0.35rem 0.6rem", background: "transparent", color: "var(--text3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", cursor: "pointer" }}
               >✕</button>
             </div>
