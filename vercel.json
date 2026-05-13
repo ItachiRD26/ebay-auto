@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/1688/search/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}
