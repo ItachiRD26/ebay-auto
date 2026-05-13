@@ -11,12 +11,20 @@ const OTAPI_BASE = "https://otapi.net/service-json";
 type OtapiItem = {
   Id:           string;
   Title:        string;
-  Price:        { ConvertedOriginalPrice?: number; OriginalPrice?: number };
+  OriginalTitle?: string;
   MainPictureUrl?: string;
-  TotalSoldQuantity?: number;
-  OriginalUrl?:  string;
-  Vendor?:       { Title?: string };
   Volume?:       number;
+  TaobaoItemUrl?: string;
+  ExternalItemUrl?: string;
+  VendorName?:   string;
+  VendorDisplayName?: string;
+  Price?: {
+    OriginalPrice?: number;           // CNY price
+    OriginalCurrencyCode?: string;
+    ConvertedPriceList?: {
+      Internal?: { Price?: number; Code?: string }; // USD already converted
+    };
+  };
 };
 
 // ─── Search 1688 via OTCommerce API ──────────────────────────────────────────
@@ -117,20 +125,27 @@ export async function POST(req: NextRequest) {
     let added = 0;
 
     for (const item of items) {
-      // OTCommerce returns price in USD (ConvertedOriginalPrice) or CNY (OriginalPrice)
-      const priceUSD = item.Price?.ConvertedOriginalPrice
-        ?? (item.Price?.OriginalPrice ? item.Price.OriginalPrice * usdRate : 0);
+      // Use USD price if already converted, else convert from CNY
+      const usdFromApi = item.Price?.ConvertedPriceList?.Internal?.Price;
+      const cnyPrice   = item.Price?.OriginalPrice ?? 0;
+      const priceUSD   = usdFromApi && usdFromApi > 0
+        ? usdFromApi
+        : cnyPrice * usdRate;
 
       if (!priceUSD || priceUSD < 1) continue;
 
-      const title = item.Title ?? "";
+      const title = item.Title ?? item.OriginalTitle ?? "";
       if (!title || title.length < 3) continue;
 
       const { shipping, suggested } = calcPricing(priceUSD, markupPct);
       if (suggested < 8 || suggested > 800) continue;
 
       const imageUrl  = item.MainPictureUrl ?? "";
-      const sourceUrl = item.OriginalUrl ?? `https://detail.1688.com/offer/${item.Id}.html`;
+      const sourceUrl = item.TaobaoItemUrl ?? item.ExternalItemUrl
+        ?? `https://detail.1688.com/offer/${item.Id.replace("abb-", "")}.html`;
+      const shopName  = item.VendorDisplayName ?? item.VendorName ?? "";
+
+      console.log(`[1688] Adding: "${title.slice(0, 40)}" CNY=${cnyPrice} USD=${priceUSD.toFixed(2)} → $${suggested}`);
 
       batch.set(queueCol(userId).doc(), {
         title,
@@ -140,8 +155,9 @@ export async function POST(req: NextRequest) {
         images:         imageUrl ? [imageUrl] : [],
         source:         "1688",
         source1688Url:  sourceUrl,
-        soldCount:      item.TotalSoldQuantity ?? item.Volume ?? 0,
-        shopName:       item.Vendor?.Title ?? "",
+        cnyPrice,
+        shopName,
+        soldCount:      item.Volume ?? 0,
         storeId,
         status:         "pending",
         createdAt:      Date.now(),
