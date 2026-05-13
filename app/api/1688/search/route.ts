@@ -65,6 +65,10 @@ async function searchOtapi(keyword: string, page = 0): Promise<OtapiItem[]> {
   };
 
   console.log(`[1688] ErrorCode: ${data.ErrorCode} items: ${data.Result?.Items?.Items?.Content?.length ?? 0}`);
+  
+  // Log first item to see full structure
+  const firstItem = data.Result?.Items?.Items?.Content?.[0];
+  if (firstItem) console.log(`[1688] First item structure: ${JSON.stringify(firstItem).slice(0, 1000)}`);
 
   if (data.ErrorCode !== "Ok") {
     throw new Error(`OTCommerce error: ${data.ErrorCode} — ${data.ErrorMessage}`);
