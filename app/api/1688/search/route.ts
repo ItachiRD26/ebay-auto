@@ -104,11 +104,35 @@ function parseJsonApiResponse(content: string): Offer[] {
 
 // ─── Parse rendered HTML (fallback) ──────────────────────────────────────────
 function parseRenderedHtml(html: string): Offer[] {
-  // With render:html, window.data should be populated
+  // Log all window.X = { globals to find where products live
+  const globals = html.match(/window\.[\w$]+\s*[=:]\s*\{/g) ?? [];
+  console.log(`[1688] window globals in rendered HTML: ${JSON.stringify(globals.slice(0, 15))}`);
+
+  // Log all script tags content snippet
+  const scripts = html.match(/<script[^>]*>([\s\S]{100,2000}?)<\/script>/g) ?? [];
+  console.log(`[1688] Script blocks found: ${scripts.length}`);
+  for (const s of scripts.slice(0, 8)) {
+    if (s.includes("offerId") || s.includes("offerList") || s.includes("subject") || s.includes("priceInfo")) {
+      console.log(`[1688] Promising script block: ${s.slice(0, 400)}`);
+    }
+  }
+
+  // Log snippet around "offerId" if it exists
+  const offerIdIdx = html.indexOf('"offerId"');
+  if (offerIdIdx > -1) {
+    console.log(`[1688] Found "offerId" at idx ${offerIdIdx}: ${html.slice(Math.max(0, offerIdIdx - 100), offerIdIdx + 300)}`);
+  } else {
+    console.log("[1688] 'offerId' not found in rendered HTML");
+    // Log a middle chunk to see what the rendered content looks like
+    console.log(`[1688] HTML middle chunk (50k-52k): ${html.slice(50000, 52000)}`);
+  }
+
   const patterns = [
     /window\.data\s*=\s*(\{[\s\S]*?\});\s*(?:window|<\/script>)/,
     /window\.__INIT_DATA__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
+    /window\.__modData__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
     /"offerList"\s*:\s*(\[[\s\S]{50,}\])\s*[,}]/,
+    /"offers"\s*:\s*(\[[\s\S]{50,}\])\s*[,}]/,
   ];
 
   for (const pat of patterns) {
@@ -119,7 +143,7 @@ function parseRenderedHtml(html: string): Offer[] {
       const list: Record<string, unknown>[] =
         parsed?.data?.offerList ?? parsed?.offerList ?? (Array.isArray(parsed) ? parsed : null);
       if (Array.isArray(list) && list.length > 0) {
-        console.log(`[1688] render:html found ${list.length} offers`);
+        console.log(`[1688] render:html found ${list.length} offers via ${pat.source.slice(0, 40)}`);
         return list.map(offer => {
           const priceInfo = offer?.priceInfo as Record<string, unknown> | undefined;
           const imgInfo   = offer?.image     as Record<string, unknown> | undefined;
