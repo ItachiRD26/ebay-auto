@@ -2,12 +2,39 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, queueCol } from "@/lib/firebase";
 import { getExchangeRate } from "@/lib/currency";
 
+// ─── Translate keyword to Chinese for 1688 ────────────────────────────────────
+// 1688 is Chinese — English keywords return empty results.
+// We use Claude to translate the keyword before searching.
+async function translateToChinesé(keyword: string): Promise<string> {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 100,
+        messages: [{
+          role: "user",
+          content: `Translate this product keyword to Simplified Chinese for searching on 1688.com. Return ONLY the Chinese translation, nothing else: "${keyword}"`
+        }]
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const data = await res.json() as { content?: { text: string }[] };
+    const translated = data?.content?.[0]?.text?.trim() ?? keyword;
+    console.log(`[1688] Translated "${keyword}" → "${translated}"`);
+    return translated;
+  } catch {
+    console.warn("[1688] Translation failed, using original keyword");
+    return keyword;
+  }
+}
+
 // ─── ScraperAPI fetch ─────────────────────────────────────────────────────────
-// ScraperAPI handles proxies + JS rendering automatically.
-// render=true executes JavaScript — required for 1688 search pages.
 async function scrape1688(keyword: string): Promise<string> {
   const target = `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(keyword)}&n=y`;
-  const scraperUrl = `https://api.scraperapi.com/?api_key=${process.env.SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render=true&country_code=cn`;
+  // wait=5000 — wait 5s after JS render for async XHR product data to load
+  const scraperUrl = `https://api.scraperapi.com/?api_key=${process.env.SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render=true&country_code=cn&wait=5000`;
 
   console.log(`[1688] ScraperAPI fetching: ${target}`);
 
@@ -122,7 +149,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "SCRAPERAPI_KEY not set in env" }, { status: 500 });
 
     console.log(`[1688] Searching: "${keyword}"`);
-    const html = await scrape1688(keyword);
+
+    // Translate to Chinese — 1688 is Chinese-only, English returns 0 results
+    const chineseKeyword = await translateToChinesé(keyword);
+    const html = await scrape1688(chineseKeyword);
 
     if (!html || html.length < 5000) {
       return NextResponse.json({ error: "1688 returned empty page" }, { status: 502 });
