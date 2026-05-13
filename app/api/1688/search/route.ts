@@ -21,48 +21,50 @@ type OtapiItem = {
 
 // ─── Search 1688 via OTCommerce API ──────────────────────────────────────────
 async function searchOtapi(keyword: string, page = 0): Promise<OtapiItem[]> {
-  // OTCommerce uses XML parameters for search
-  const xmlParams = `<SearchItemsParameters><SearchText>${keyword}</SearchText><Pagination><Page>${page}</Page><ItemsPerPage>40</ItemsPerPage></Pagination></SearchItemsParameters>`;
+  // Per docs: use <ItemTitle> not <SearchText>, add <Provider>Alibaba1688</Provider>
+  // framePosition=page, frameSize=40, blockList can be empty for basic search
+  const xmlParams = [
+    `<SearchItemsParameters>`,
+    `<ItemTitle>${keyword}</ItemTitle>`,
+    `<Provider>Alibaba1688</Provider>`,
+    `<UseOptimalFrameSize>true</UseOptimalFrameSize>`,
+    `</SearchItemsParameters>`,
+  ].join("");
 
-  const url = `${OTAPI_BASE}/BatchSearchItemsFrame?instanceKey=${OTAPI_KEY}&language=en&xmlParameters=${encodeURIComponent(xmlParams)}`;
+  const params = new URLSearchParams({
+    instanceKey:   OTAPI_KEY,
+    language:      "en",
+    sessionId:     "",
+    framePosition: String(page * 40),
+    frameSize:     "40",
+    blockList:     "",
+    xmlParameters: xmlParams,
+  });
+
+  const url = `${OTAPI_BASE}/BatchSearchItemsFrame?${params.toString()}`;
   console.log(`[1688] OTCommerce search: "${keyword}" page ${page}`);
+  console.log(`[1688] URL: ${url.slice(0, 200)}`);
 
   const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  if (!res.ok) throw new Error(`OTCommerce ${res.status}: ${await res.text().then(t => t.slice(0, 200))}`);
+  const text = await res.text();
+  console.log(`[1688] Raw response (500 chars): ${text.slice(0, 500)}`);
 
-  const data = await res.json() as {
+  if (!res.ok) throw new Error(`OTCommerce HTTP ${res.status}: ${text.slice(0, 200)}`);
+
+  const data = JSON.parse(text) as {
     Result?: string;
     ErrorCode?: string;
     ErrorMessage?: string;
     ItemsResult?: { Items?: { Content?: OtapiItem[] } };
   };
 
-  console.log(`[1688] OTCommerce result: ${data.Result} error: ${data.ErrorCode ?? "none"}`);
+  console.log(`[1688] Result: ${data.Result} ErrorCode: ${data.ErrorCode ?? "none"}`);
 
   if (data.Result !== "Ok") {
     throw new Error(`OTCommerce error: ${data.ErrorCode} — ${data.ErrorMessage}`);
   }
 
   return data.ItemsResult?.Items?.Content ?? [];
-}
-
-// ─── Alternative: simple search endpoint ─────────────────────────────────────
-async function searchOtapiSimple(keyword: string): Promise<OtapiItem[]> {
-  const url = `${OTAPI_BASE}/SearchItems?instanceKey=${OTAPI_KEY}&language=en&searchText=${encodeURIComponent(keyword)}&page=0&itemsPerPage=40`;
-  console.log(`[1688] OTCommerce simple search: "${keyword}"`);
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  if (!res.ok) throw new Error(`OTCommerce ${res.status}`);
-
-  const data = await res.json() as {
-    Result?: string;
-    ErrorCode?: string;
-    Items?: OtapiItem[];
-  };
-
-  console.log(`[1688] Result: ${data.Result} items: ${data.Items?.length ?? 0}`);
-  if (data.Result !== "Ok") throw new Error(`OTCommerce: ${data.ErrorCode}`);
-  return data.Items ?? [];
 }
 
 // ─── Pricing ──────────────────────────────────────────────────────────────────
@@ -85,17 +87,12 @@ export async function POST(req: NextRequest) {
 
     console.log(`[1688] Searching: "${keyword}"`);
 
-    // Try BatchSearchItemsFrame first, fallback to SearchItems
+    // Search via OTCommerce API
     let items: OtapiItem[] = [];
     try {
       items = await searchOtapi(keyword);
-    } catch (e1) {
-      console.warn(`[1688] BatchSearch failed: ${e1} — trying simple search`);
-      try {
-        items = await searchOtapiSimple(keyword);
-      } catch (e2) {
-        throw new Error(`Both OTCommerce endpoints failed: ${e2}`);
-      }
+    } catch (e) {
+      throw new Error(`OTCommerce search failed: ${e}`);
     }
 
     console.log(`[1688] Found ${items.length} products`);
