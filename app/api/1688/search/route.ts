@@ -52,19 +52,25 @@ async function searchOtapi(keyword: string, page = 0): Promise<OtapiItem[]> {
   if (!res.ok) throw new Error(`OTCommerce HTTP ${res.status}: ${text.slice(0, 200)}`);
 
   const data = JSON.parse(text) as {
-    Result?: string;
     ErrorCode?: string;
     ErrorMessage?: string;
-    ItemsResult?: { Items?: { Content?: OtapiItem[] } };
+    Result?: {
+      Items?: {
+        Items?: {
+          Content?: OtapiItem[];
+          TotalCount?: number;
+        };
+      };
+    };
   };
 
-  console.log(`[1688] Result: ${data.Result} ErrorCode: ${data.ErrorCode ?? "none"}`);
+  console.log(`[1688] ErrorCode: ${data.ErrorCode} items: ${data.Result?.Items?.Items?.Content?.length ?? 0}`);
 
-  if (data.Result !== "Ok") {
+  if (data.ErrorCode !== "Ok") {
     throw new Error(`OTCommerce error: ${data.ErrorCode} — ${data.ErrorMessage}`);
   }
 
-  return data.ItemsResult?.Items?.Content ?? [];
+  return data.Result?.Items?.Items?.Content ?? [];
 }
 
 // ─── Pricing ──────────────────────────────────────────────────────────────────
