@@ -2,97 +2,112 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, queueCol } from "@/lib/firebase";
 import { getExchangeRate } from "@/lib/currency";
 
-// ─── Oxylabs scraper for 1688 ─────────────────────────────────────────────────
 const OXYLABS_AUTH = Buffer.from(
   `${process.env.OXYLABS_USERNAME}:${process.env.OXYLABS_PASSWORD}`
 ).toString("base64");
 
-async function scrape1688Search(keyword: string, page = 1): Promise<Record<string, unknown>> {
-  const url = `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(keyword)}&beginPage=${page}`;
+// ─── Fetch HTML from Oxylabs ──────────────────────────────────────────────────
+async function oxylabsFetch(url: string): Promise<string> {
   const res = await fetch("https://realtime.oxylabs.io/v1/queries", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Basic ${OXYLABS_AUTH}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Basic ${OXYLABS_AUTH}` },
     body: JSON.stringify({
       source: "universal",
       url,
-      render: "html",   // 1688 needs JS rendering
-      geo_location: "China",
+      // No render:html — use static HTML which is faster and cheaper
+      // 1688 embeds product data in <script> tags as JSON
     }),
     signal: AbortSignal.timeout(30000),
   });
-
-  if (!res.ok) throw new Error(`Oxylabs error: ${res.status} ${await res.text().then(t => t.slice(0, 200))}`);
-  return await res.json() as Record<string, unknown>;
+  if (!res.ok) throw new Error(`Oxylabs ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json() as { results?: { content?: string }[] };
+  return data?.results?.[0]?.content ?? "";
 }
 
-// ─── Parse 1688 search results from HTML ─────────────────────────────────────
-function parseSearchResults(html: string): {
-  title: string; price: number; imageUrl: string;
-  productUrl: string; sales: number; shopName: string;
-}[] {
-  const results: { title: string; price: number; imageUrl: string; productUrl: string; sales: number; shopName: string }[] = [];
+// ─── Try every known 1688 JSON embedding pattern ─────────────────────────────
+function extractOffers(html: string): { title: string; price: number; imageUrl: string; productUrl: string; sales: number; shopName: string }[] {
 
-  // Extract product cards — 1688 uses offer cards with data attributes
-  const cardRegex = /<div[^>]+class="[^"]*offer-item[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/g;
-  
-  // Simpler approach: extract JSON data embedded in page
-  const jsonMatch = html.match(/window\.__INIT_DATA__\s*=\s*({[\s\S]*?});?\s*<\/script>/);
-  if (jsonMatch) {
+  // Pattern 1: window.__INIT_DATA__ = {...}
+  const patterns = [
+    /window\.__INIT_DATA__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
+    /window\._duxData\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
+    /"offerList"\s*:\s*(\[[\s\S]*?\])\s*[,}]/,
+    /"offers"\s*:\s*(\[[\s\S]*?\])\s*[,}]/,
+    /g_page_config\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
+    /window\.pageData\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (!match) continue;
     try {
-      const data = JSON.parse(jsonMatch[1]);
-      const offers = data?.data?.offerList ?? data?.offerList ?? [];
-      for (const offer of offers.slice(0, 30)) {
-        const price = parseFloat(offer?.priceInfo?.price ?? offer?.price ?? "0");
-        if (!price) continue;
-        results.push({
-          title: offer?.subject ?? offer?.title ?? "",
-          price,
-          imageUrl: offer?.image?.imgUrl ?? offer?.imgUrl ?? "",
-          productUrl: `https://detail.1688.com/offer/${offer?.offerId}.html`,
-          sales: parseInt(offer?.tradeCount ?? offer?.soldCount ?? "0") || 0,
-          shopName: offer?.companyName ?? offer?.shop ?? "",
-        });
+      const parsed = JSON.parse(match[1]);
+      // Try multiple paths where offerList might live
+      const list =
+        parsed?.data?.offerList ??
+        parsed?.offerList ??
+        parsed?.result?.offerList ??
+        parsed?.mods?.offerList?.data ??
+        (Array.isArray(parsed) ? parsed : null);
+
+      if (Array.isArray(list) && list.length > 0) {
+        console.log(`[1688] Found ${list.length} offers via pattern: ${pattern.source.slice(0, 40)}`);
+        return list.slice(0, 30).map((offer: Record<string, unknown>) => {
+          const priceInfo = offer?.priceInfo as Record<string, unknown> | undefined;
+          const price = parseFloat(
+            String(priceInfo?.price ?? priceInfo?.minPrice ?? offer?.price ?? "0")
+          );
+          const imgObj = offer?.image as Record<string, unknown> | undefined;
+          return {
+            title:      String(offer?.subject ?? offer?.title ?? offer?.offerName ?? ""),
+            price,
+            imageUrl:   String(imgObj?.imgUrl ?? offer?.imgUrl ?? offer?.image ?? ""),
+            productUrl: `https://detail.1688.com/offer/${offer?.offerId ?? ""}.html`,
+            sales:      parseInt(String(offer?.tradeCount ?? offer?.soldCount ?? "0")) || 0,
+            shopName:   String(offer?.companyName ?? offer?.sellerName ?? ""),
+          };
+        }).filter(o => o.price > 0 && o.title);
       }
-      return results;
-    } catch { /* fall through to regex parsing */ }
+    } catch { /* try next pattern */ }
   }
 
-  // Regex fallback for price and title extraction
-  const titleRegex = /class="[^"]*title[^"]*"[^>]*>([^<]{10,100})</g;
-  const priceRegex = /class="[^"]*price[^"]*"[^>]*>[\s\S]*?(\d+\.?\d*)/g;
-  const imgRegex = /<img[^>]+src="(https:\/\/[^"]+1688[^"]*\.(?:jpg|jpeg|png|webp))[^"]*"/g;
-  const linkRegex = /href="(https:\/\/detail\.1688\.com\/offer\/\d+\.html)"/g;
+  // Pattern 2: Extract individual offer blocks via regex (last resort)
+  console.log("[1688] JSON patterns failed — trying regex extraction");
+  const results: { title: string; price: number; imageUrl: string; productUrl: string; sales: number; shopName: string }[] = [];
 
-  const titles: string[] = [], prices: number[] = [], images: string[] = [], links: string[] = [];
+  // offerId + price pairs
+  const offerRegex = /"offerId"\s*:\s*"(\d+)"[\s\S]{0,500}?"price"\s*:\s*"([\d.]+)"/g;
+  const titleRegex = /"subject"\s*:\s*"([^"]{10,200})"/g;
+  const imgRegex   = /"imgUrl"\s*:\s*"(https?:[^"]+)"/g;
 
+  const offerIds: string[] = [], prices: number[] = [], titles: string[] = [], imgs: string[] = [];
   let m;
-  while ((m = titleRegex.exec(html)) !== null) titles.push(m[1].trim());
-  while ((m = priceRegex.exec(html)) !== null) prices.push(parseFloat(m[1]));
-  while ((m = imgRegex.exec(html)) !== null && images.length < 30) images.push(m[1]);
-  while ((m = linkRegex.exec(html)) !== null && links.length < 30) links.push(m[1]);
+  while ((m = offerRegex.exec(html)) !== null) { offerIds.push(m[1]); prices.push(parseFloat(m[2])); }
+  while ((m = titleRegex.exec(html)) !== null && titles.length < 30) titles.push(m[1]);
+  while ((m = imgRegex.exec(html)) !== null && imgs.length < 30) imgs.push(m[1]);
 
-  const count = Math.min(titles.length, prices.length, 30);
+  const count = Math.min(offerIds.length, titles.length, 30);
   for (let i = 0; i < count; i++) {
+    if (!prices[i] || prices[i] < 0.5) continue;
     results.push({
       title: titles[i] ?? "",
-      price: prices[i] ?? 0,
-      imageUrl: images[i] ?? "",
-      productUrl: links[i] ?? "",
+      price: prices[i],
+      imageUrl: imgs[i] ?? "",
+      productUrl: `https://detail.1688.com/offer/${offerIds[i]}.html`,
       sales: 0,
       shopName: "",
     });
   }
+
+  console.log(`[1688] Regex extraction found ${results.length} products`);
   return results;
 }
 
-// ─── Convert CNY to USD and calculate suggested price ────────────────────────
+// ─── Pricing ──────────────────────────────────────────────────────────────────
 function calcPricing(cnyPrice: number, usdRate: number, markupPct: number) {
-  const costUSD = cnyPrice * usdRate;
-  const shipping = costUSD < 5 ? 4.5 : costUSD < 15 ? 5.5 : 6.5; // rough estimate
-  const ebayFee = (costUSD + shipping) * 0.135;
+  const costUSD  = cnyPrice * usdRate;
+  const shipping = costUSD < 5 ? 4.5 : costUSD < 15 ? 5.5 : 6.5;
+  const ebayFee  = (costUSD + shipping) * 0.135;
   const suggested = Math.ceil((costUSD + shipping + ebayFee) * (1 + markupPct / 100) * 10) / 10;
   return { costUSD: Math.round(costUSD * 100) / 100, shipping, suggested };
 }
@@ -106,62 +121,77 @@ export async function POST(req: NextRequest) {
 
     if (!keyword || !userId || !storeId)
       return NextResponse.json({ error: "keyword, userId, storeId required" }, { status: 400 });
-
     if (!process.env.OXYLABS_USERNAME || !process.env.OXYLABS_PASSWORD)
-      return NextResponse.json({ error: "Oxylabs credentials not configured" }, { status: 500 });
+      return NextResponse.json({ error: "OXYLABS_USERNAME / OXYLABS_PASSWORD not set" }, { status: 500 });
 
-    console.log(`[1688] Searching: "${keyword}"`);
+    // Try multiple 1688 search URLs — different pages have different HTML structures
+    const searchUrls = [
+      `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(keyword)}`,
+      `https://www.1688.com/s/offer_search.htm?keywords=${encodeURIComponent(keyword)}&n=y`,
+    ];
 
-    // Scrape 1688
-    const scraped = await scrape1688Search(keyword);
-    const html = (scraped as { results?: { content?: string }[] })?.results?.[0]?.content ?? "";
-    if (!html) return NextResponse.json({ error: "No content from Oxylabs" }, { status: 502 });
+    let html = "";
+    let usedUrl = "";
+    for (const url of searchUrls) {
+      console.log(`[1688] Fetching: ${url}`);
+      html = await oxylabsFetch(url).catch(e => { console.warn(`[1688] URL failed: ${e.message}`); return ""; });
+      if (html.length > 1000) { usedUrl = url; break; }
+    }
 
-    // Parse results
-    const products = parseSearchResults(html);
-    console.log(`[1688] Found ${products.length} products for "${keyword}"`);
+    if (!html || html.length < 1000) {
+      console.error("[1688] Empty or too-short HTML response");
+      return NextResponse.json({ error: "1688 page returned no content — check Oxylabs plan/credentials" }, { status: 502 });
+    }
 
-    if (products.length === 0)
-      return NextResponse.json({ added: 0, message: "No products found — try a different keyword" });
+    console.log(`[1688] HTML length: ${html.length} chars from ${usedUrl}`);
 
-    // Get exchange rate (CNY → USD)
-    const usdRate = await getExchangeRate("CNY", "USD").catch(() => 0.138); // fallback rate
+    // Log a snippet to see what structure we got
+    const scriptSnippet = html.match(/window\.[A-Z_a-z]+\s*=\s*\{/g)?.slice(0, 5) ?? [];
+    console.log(`[1688] Script globals found: ${JSON.stringify(scriptSnippet)}`);
 
-    // Add to queue
-    const batch = db.batch();
+    const offers = extractOffers(html);
+    console.log(`[1688] Parsed ${offers.length} products for "${keyword}"`);
+
+    if (offers.length === 0) {
+      // Save a snippet to help debug
+      const snippet = html.slice(0, 2000);
+      console.log(`[1688] HTML snippet for debug:\n${snippet}`);
+      return NextResponse.json({ added: 0, message: "Parser found 0 products — check logs for HTML structure" });
+    }
+
+    const usdRate = await getExchangeRate("CNY", "USD").catch(() => 0.138);
+    const batch   = db.batch();
     let added = 0;
 
-    for (const p of products) {
-      if (!p.title || !p.price || p.price < 1) continue;
-
+    for (const p of offers) {
+      if (!p.title || p.price < 0.5) continue;
       const { costUSD, shipping, suggested } = calcPricing(p.price, usdRate, markupPct);
-      if (suggested < 10 || suggested > 500) continue; // sanity check
+      if (suggested < 8 || suggested > 600) continue;
 
       const docRef = queueCol(userId).doc();
       batch.set(docRef, {
-        title:          p.title,
-        price:          costUSD,
+        title:         p.title,
+        price:         costUSD,
         suggestedPrice: suggested,
-        shipping:       shipping,
-        images:         p.imageUrl ? [p.imageUrl] : [],
-        source:         "1688",
-        source1688Url:  p.productUrl,
-        cnyPrice:       p.price,
-        shopName:       p.shopName,
-        soldCount:      p.sales,
+        shipping,
+        images:        p.imageUrl ? [p.imageUrl] : [],
+        source:        "1688",
+        source1688Url: p.productUrl,
+        cnyPrice:      p.price,
+        shopName:      p.shopName,
+        soldCount:     p.sales,
         storeId,
-        status:         "pending",
-        createdAt:      Date.now(),
-        updatedAt:      Date.now(),
+        status:        "pending",
+        createdAt:     Date.now(),
+        updatedAt:     Date.now(),
       });
       added++;
-      if (added >= 20) break; // max 20 per search
+      if (added >= 25) break;
     }
 
     if (added > 0) await batch.commit();
     console.log(`[1688] ✅ Added ${added} products from "${keyword}"`);
-
-    return NextResponse.json({ success: true, added, total: products.length });
+    return NextResponse.json({ success: true, added, total: offers.length });
 
   } catch (e) {
     console.error("[1688] Error:", e);
