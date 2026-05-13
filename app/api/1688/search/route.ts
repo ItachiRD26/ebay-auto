@@ -2,73 +2,55 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, queueCol } from "@/lib/firebase";
 import { getExchangeRate } from "@/lib/currency";
 
-const OXYLABS_AUTH = Buffer.from(
-  `${process.env.OXYLABS_USERNAME}:${process.env.OXYLABS_PASSWORD}`
-).toString("base64");
-
-// ─── Scrape 1688 with render:html ─────────────────────────────────────────────
-// 1688 search pages are JS-rendered — we need render:html to get product data.
-// This route needs maxDuration: 60 in vercel.json.
+// ─── ScraperAPI fetch ─────────────────────────────────────────────────────────
+// ScraperAPI handles proxies + JS rendering automatically.
+// render=true executes JavaScript — required for 1688 search pages.
 async function scrape1688(keyword: string): Promise<string> {
-  const url = `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(keyword)}&n=y`;
-  console.log(`[1688] Fetching with render:html — ${url}`);
+  const target = `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(keyword)}&n=y`;
+  const scraperUrl = `https://api.scraperapi.com/?api_key=${process.env.SCRAPERAPI_KEY}&url=${encodeURIComponent(target)}&render=true&country_code=cn`;
 
-  // Match Oxylabs docs exactly: source universal + render html
-  const res = await fetch("https://realtime.oxylabs.io/v1/queries", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Basic ${OXYLABS_AUTH}`,
-    },
-    body: JSON.stringify({
-      source: "universal",
-      url,
-      render: "html",
-    }),
-    signal: AbortSignal.timeout(50000), // 50s — under Vercel's 60s limit
+  console.log(`[1688] ScraperAPI fetching: ${target}`);
+
+  const res = await fetch(scraperUrl, {
+    signal: AbortSignal.timeout(55000),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Oxylabs ${res.status}: ${err.slice(0, 200)}`);
+    throw new Error(`ScraperAPI ${res.status}: ${err.slice(0, 200)}`);
   }
 
-  const data = await res.json() as { results?: { content?: string; status_code?: number }[] };
-  const content = data?.results?.[0]?.content ?? "";
-  const statusCode = data?.results?.[0]?.status_code ?? 0;
-  console.log(`[1688] Response: ${content.length} chars, status_code=${statusCode}`);
-  return content;
+  const html = await res.text();
+  console.log(`[1688] HTML length: ${html.length} chars`);
+  return html;
 }
 
 // ─── Parse rendered HTML ──────────────────────────────────────────────────────
 type Offer = { title: string; price: number; imageUrl: string; productUrl: string; sales: number; shopName: string };
 
 function parseHtml(html: string): Offer[] {
-  // Log what globals exist to help debug
+  // Debug: log globals and check for offer data
   const globals = html.match(/window\.[\w$]+\s*[=:]\s*[\[{]/g) ?? [];
   console.log(`[1688] window globals: ${JSON.stringify(globals.slice(0, 12))}`);
-
-  // Check if offerId exists at all
   const hasOfferId = html.includes('"offerId"');
   const hasSubject = html.includes('"subject"');
-  console.log(`[1688] hasOfferId=${hasOfferId} hasSubject=${hasSubject}`);
+  console.log(`[1688] hasOfferId=${hasOfferId} hasSubject=${hasSubject} htmlLen=${html.length}`);
 
-  if (!hasOfferId) {
-    // Log middle of HTML to understand page state
-    console.log(`[1688] HTML[40k-42k]: ${html.slice(40000, 42000)}`);
+  if (!hasOfferId && !hasSubject) {
+    console.log(`[1688] No product data found. HTML[30k-32k]: ${html.slice(30000, 32000)}`);
     return [];
   }
 
-  // Try all known patterns where 1688 embeds offer data
-  const tryPatterns = [
+  // Try JSON patterns first
+  const patterns = [
     /window\.__INIT_DATA__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
     /window\.__modData__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
     /window\.g_srp_data\s*=\s*(\{[\s\S]*?\});\s*<\/script>/,
     /window\.data\s*=\s*(\{[\s\S]*?\});\s*(?:window|var|<\/script>)/,
-    /\"offerList\"\s*:\s*(\[[\s\S]{100,100000}\])/,
+    /"offerList"\s*:\s*(\[[\s\S]{100,200000}\])/,
   ];
 
-  for (const pat of tryPatterns) {
+  for (const pat of patterns) {
     const m = html.match(pat);
     if (!m) continue;
     try {
@@ -80,20 +62,20 @@ function parseHtml(html: string): Offer[] {
         (Array.isArray(parsed) ? parsed : null);
 
       if (Array.isArray(list) && list.length > 0) {
-        console.log(`[1688] Found ${list.length} offers via pattern`);
+        console.log(`[1688] ✅ Found ${list.length} offers via JSON pattern`);
         return list.map(toOffer).filter(o => o.price > 0 && o.title.length > 2);
       }
-    } catch { /* try next */ }
+    } catch { /* next */ }
   }
 
-  // Last resort: extract individual fields with regex
-  console.log("[1688] Trying field-level regex extraction");
-  const offerIds   = [...html.matchAll(/"offerId"\s*:\s*"(\d+)"/g)].map(m => m[1]);
-  const subjects   = [...html.matchAll(/"subject"\s*:\s*"([^"]{5,200})"/g)].map(m => m[1]);
-  const prices     = [...html.matchAll(/"price"\s*:\s*"([\d.]+)"/g)].map(m => parseFloat(m[1]));
-  const imgUrls    = [...html.matchAll(/"imgUrl"\s*:\s*"(https?:[^"]+)"/g)].map(m => m[1]);
+  // Regex fallback
+  console.log("[1688] JSON patterns failed — trying field regex");
+  const offerIds = [...html.matchAll(/"offerId"\s*:\s*"(\d+)"/g)].map(m => m[1]);
+  const subjects = [...html.matchAll(/"subject"\s*:\s*"([^"]{5,200})"/g)].map(m => m[1]);
+  const prices   = [...html.matchAll(/"price"\s*:\s*"([\d.]+)"/g)].map(m => parseFloat(m[1]));
+  const imgUrls  = [...html.matchAll(/"imgUrl"\s*:\s*"(https?:[^"]+)"/g)].map(m => m[1]);
 
-  console.log(`[1688] Field regex: ${offerIds.length} ids, ${subjects.length} subjects, ${prices.length} prices`);
+  console.log(`[1688] Regex: ${offerIds.length} ids / ${subjects.length} subjects / ${prices.length} prices`);
   const count = Math.min(offerIds.length, subjects.length, prices.length, 25);
   return Array.from({ length: count }, (_, i) => ({
     title:      subjects[i] ?? "",
@@ -136,22 +118,21 @@ export async function POST(req: NextRequest) {
 
     if (!keyword || !userId || !storeId)
       return NextResponse.json({ error: "keyword, userId, storeId required" }, { status: 400 });
-    if (!process.env.OXYLABS_USERNAME || !process.env.OXYLABS_PASSWORD)
-      return NextResponse.json({ error: "OXYLABS_USERNAME / OXYLABS_PASSWORD not set in env" }, { status: 500 });
+    if (!process.env.SCRAPERAPI_KEY)
+      return NextResponse.json({ error: "SCRAPERAPI_KEY not set in env" }, { status: 500 });
 
     console.log(`[1688] Searching: "${keyword}"`);
     const html = await scrape1688(keyword);
 
     if (!html || html.length < 5000) {
-      console.error(`[1688] HTML too short (${html.length} chars) — page may be blocked`);
-      return NextResponse.json({ error: "1688 returned empty page — may be geo-blocked" }, { status: 502 });
+      return NextResponse.json({ error: "1688 returned empty page" }, { status: 502 });
     }
 
     const offers = parseHtml(html);
-    console.log(`[1688] Total offers parsed: ${offers.length}`);
+    console.log(`[1688] Total offers: ${offers.length}`);
 
     if (offers.length === 0) {
-      return NextResponse.json({ added: 0, message: "Parser found 0 products — check logs for HTML structure" });
+      return NextResponse.json({ added: 0, message: "Parser found 0 products — check Vercel logs" });
     }
 
     const usdRate = await getExchangeRate("CNY", "USD").catch(() => 0.138);
