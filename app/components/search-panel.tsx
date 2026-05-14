@@ -260,11 +260,9 @@ export default function SearchPanel({
               borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer" }}>
             🔗 Reconnect
           </button>
-          <button onClick={async () => {
-            await fetch(`/api/ebay/search-status?storeId=${tokenExpiredStore}`, { method: "DELETE" }).catch(() => {});
-            setTokenExpiredStore(null);
-          }} style={{ padding: "0.35rem 0.6rem", background: "transparent", color: "var(--text3)",
-            border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", cursor: "pointer" }}>✕</button>
+          <button onClick={() => setTokenExpiredStore(null)}
+            style={{ padding: "0.35rem 0.6rem", background: "transparent", color: "var(--text3)",
+              border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", cursor: "pointer" }}>✕</button>
         </div>
       )}
     </div>

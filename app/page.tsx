@@ -265,6 +265,24 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [searching, selectedStoreId]);
 
+  // ── Auto-detect eBay reconnection after token expiry ─────────────────────────
+  useEffect(() => {
+    if (!tokenExpiredStore) return;
+    const checkReconnected = async () => {
+      try {
+        const res  = await fetch(`/api/ebay/debug-token?storeId=${tokenExpiredStore}`);
+        const data = await res.json();
+        if (data.exists && !data.isExpired) {
+          setTokenExpiredStore(null);
+          toast("✅ eBay reconnected — resume your search below", "ok");
+        }
+      } catch { /* ignore */ }
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") checkReconnected(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [tokenExpiredStore]);
+
   // ── Helpers ───────────────────────────────────────────────────────────────────
   const uid = user?.uid ?? "";
 
@@ -343,6 +361,7 @@ export default function Dashboard() {
     if (!requireStore()) return;
     setSearching(true);
     if (startIndex === 0 && user) { clearSearchState(user.uid); setSavedSearchState(null); }
+    let stoppedDueToTokenExpiry = false;
     try {
       if (isAuto) {
         const kwRes = await fetch(`/api/ebay/search?userId=${uid}`);
@@ -365,15 +384,20 @@ export default function Dashboard() {
             if (sr.status === 401) {
               const errData = await sr.json();
               if (errData.error === "TOKEN_EXPIRED") {
+                stoppedDueToTokenExpiry = true;
                 setTokenExpiredStore(selectedStoreId);
                 setPaused(true); pauseRef.current = true;
+                if (user) {
+                  const snap = { userId: user.uid, storeId: selectedStoreId, keywordIndex: i, keyword: kw, total: reversed.length, savedAt: Date.now() };
+                  saveSearchState(snap); setSavedSearchState(snap);
+                }
                 toast("⚠️ eBay token expired — reconnect your store", "err");
                 break;
               }
             }
           } catch { /* continue */ }
         }
-        if (user) { clearSearchState(user.uid); setSavedSearchState(null); }
+        if (!stoppedDueToTokenExpiry && user) { clearSearchState(user.uid); setSavedSearchState(null); }
         currentSearchRef.current = null;
       } else if (searchMode === "keyword") {
         if (!kwInput.trim()) { toast("Type a keyword first", "err"); return; }
@@ -873,11 +897,9 @@ export default function Dashboard() {
                   borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer", whiteSpace: "nowrap" }}>
                 🔗 Reconnect
               </button>
-              <button onClick={async () => {
-                await fetch(`/api/ebay/search-status?storeId=${tokenExpiredStore}`, { method: "DELETE" }).catch(() => {});
-                setTokenExpiredStore(null); setPaused(false); pauseRef.current = false;
-              }} style={{ padding: "0.35rem 0.6rem", background: "transparent", color: "var(--text3)",
-                border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", cursor: "pointer" }}>✕</button>
+              <button onClick={() => setTokenExpiredStore(null)}
+                style={{ padding: "0.35rem 0.6rem", background: "transparent", color: "var(--text3)",
+                  border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "0.78rem", cursor: "pointer" }}>✕</button>
             </div>
           )}
 
