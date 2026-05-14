@@ -149,19 +149,22 @@ export async function POST(req: NextRequest) {
 
       batch.set(queueCol(userId).doc(), {
         title,
-        price:          Math.round(priceUSD * 100) / 100,
-        suggestedPrice: suggested,
+        totalMarketCost:       Math.round(priceUSD * 100) / 100,
+        suggestedSellingPrice: suggested,
+        ebayReferencePrice:    suggested,
+        price:                 Math.round(priceUSD * 100) / 100,
+        suggestedPrice:        suggested,
         shipping,
-        images:         imageUrl ? [imageUrl] : [],
-        source:         "1688",
-        source1688Url:  sourceUrl,
+        images:                imageUrl ? [imageUrl] : [],
+        source:                "1688",
+        source1688Url:         sourceUrl,
         cnyPrice,
         shopName,
-        soldCount:      item.Volume ?? 0,
+        soldCount:             item.Volume ?? 0,
         storeId,
-        status:         "pending",
-        createdAt:      Date.now(),
-        updatedAt:      Date.now(),
+        status:                "pending",
+        createdAt:             Date.now(),
+        updatedAt:             Date.now(),
       });
       added++;
       if (added >= 25) break;

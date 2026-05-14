@@ -44,21 +44,26 @@ export async function POST(req: NextRequest) {
 
     const docRef = queueCol(uid).doc();
     await docRef.set({
-      title:         title.slice(0, 200),
-      price:         Math.round(price * 100) / 100,
+      title:                title.slice(0, 200),
+      // Fields ProductCard reads for prices
+      totalMarketCost:      Math.round(price * 100) / 100,  // USD cost → "Ref. eBay" base
+      suggestedSellingPrice: suggestedPrice,                 // → "Tu precio"
+      ebayReferencePrice:   suggestedPrice,                  // fallback ref price
+      // Raw data fields
+      price:                Math.round(price * 100) / 100,
       suggestedPrice,
       shipping,
-      cnyPrice:      cnyPrice ?? 0,
-      images:        (images ?? []).slice(0, 10),
-      variants:      variants ?? [],
-      shopName:      shopName ?? "",
-      soldCount:     soldCount ?? 0,
-      source:        "1688-extension",
-      source1688Url: source1688Url ?? "",
+      cnyPrice:             cnyPrice ?? 0,
+      images:               (images ?? []).slice(0, 10),
+      variants:             variants ?? [],
+      shopName:             shopName ?? "",
+      soldCount:            soldCount ?? 0,
+      source:               "1688-extension",
+      source1688Url:        source1688Url ?? "",
       storeId,
-      status:        "pending",
-      createdAt:     Date.now(),
-      updatedAt:     Date.now(),
+      status:               "pending",
+      createdAt:            Date.now(),
+      updatedAt:            Date.now(),
     });
 
     console.log(`[extension] ✅ "${title.slice(0, 50)}" → ${uid} / ${storeId}`);
