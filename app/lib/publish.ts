@@ -585,7 +585,6 @@ export async function publishProductById(productId: string, userToken: string, u
         );
         const sugData = await sugRes.json() as { categorySuggestions?: { category?: { categoryId?: string; categoryName?: string } }[] };
 
-        // Skip categories that require book-specific aspects (Language, Book Title, Author)
         const BOOK_CATS = new Set(["267", "261186", "11232", "171228", "183454"]);
         const goodSuggestion = sugData.categorySuggestions?.find(s => {
           const id = s.category?.categoryId ?? "";
@@ -601,6 +600,57 @@ export async function publishProductById(productId: string, userToken: string, u
     }
 
     refImages = (product.images as string[] | undefined) ?? [];
+
+    // ── Convert variantGroups → VariationsData format ─────────────────────
+    // variantGroups: [{name:"Color", values:[{value:"Red", image:"url"}]}, ...]
+    type VG = { name: string; values: { value: string; image: string | null }[] };
+    const variantGroups = (product.variantGroups as VG[] | undefined) ?? [];
+
+    if (variantGroups.length > 0) {
+      // Find the dimension that has images (usually Color)
+      const picDimension = variantGroups.find(g => g.values.some(v => v.image)) ?? variantGroups[0];
+
+      // Build specificsSet: { Color: ["Red","Blue"], Size: ["36","37"] }
+      const specificsSet: Record<string, string[]> = {};
+      for (const g of variantGroups) {
+        specificsSet[g.name] = g.values.map(v => v.value).filter(Boolean);
+      }
+
+      // Build picturesByVariant: { "Red": ["url1"], "Blue": ["url2"] }
+      const picturesByVariant: Record<string, string[]> = {};
+      for (const v of picDimension.values) {
+        if (v.image && v.value) picturesByVariant[v.value] = [v.image];
+      }
+
+      // Build all variation combinations (Color × Size × ...)
+      const combinations: Record<string, string>[] = [{}];
+      for (const g of variantGroups) {
+        const expanded: Record<string, string>[] = [];
+        for (const existing of combinations) {
+          for (const v of g.values) {
+            expanded.push({ ...existing, [g.name]: v.value });
+          }
+        }
+        combinations.splice(0, combinations.length, ...expanded);
+      }
+
+      // Cap at MAX_VARIATIONS
+      const cappedCombinations = combinations.slice(0, MAX_VARIATIONS);
+      const suggestedUSD = (product.suggestedSellingPrice as number) || (product.totalMarketCost as number) || 0;
+
+      refVariations = {
+        variations: cappedCombinations.map(specifics => ({
+          specifics,
+          refPrice: suggestedUSD,
+        })),
+        specificsSet,
+        picturesByVariant,
+        pictureDimension: picDimension.name,
+      };
+
+      console.log(`[publish] 1688 variants: ${cappedCombinations.length} combos, dimension="${picDimension.name}", pics=${Object.keys(picturesByVariant).length}`);
+    }
+
     console.log(`[publish] 1688 extension: category=${refCategoryId} images=${refImages.length}`);
   }
 

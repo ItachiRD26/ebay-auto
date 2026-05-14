@@ -1,13 +1,13 @@
 // ─── Firebase config — same as DropFlow ──────────────────────────────────────
 // Replace these with your actual Firebase config values
 const FIREBASE_CONFIG = {
-  apiKey:            "AIzaSyC2pPD1o4ffg6XkUjlpIe17IEppk25urjk",
-  authDomain:        "ebay-5984f.firebaseapp.com",
-  projectId:         "ebay-5984f",
+  apiKey:     "AIzaSyC2pPD1o4ffg6XkUjlpIe17IEppk25urjk",
+  authDomain: "ebay-5984f.firebaseapp.com",
+  projectId:  "ebay-5984f",
 };
 
 const DROPFLOW_API = "https://www.dropflow-app.com";
- 
+
 // ─── Firebase Auth via REST API (no SDK needed in extension) ─────────────────
 async function firebaseSignIn(email, password) {
   const res = await fetch(
@@ -22,7 +22,7 @@ async function firebaseSignIn(email, password) {
   if (!res.ok) throw new Error(data.error?.message ?? "Login failed");
   return data; // { idToken, refreshToken, localId (uid), email, expiresIn }
 }
- 
+
 async function firebaseRefreshToken(refreshToken) {
   const res = await fetch(
     `https://securetoken.googleapis.com/v1/token?key=${FIREBASE_CONFIG.apiKey}`,
@@ -36,7 +36,7 @@ async function firebaseRefreshToken(refreshToken) {
   if (!res.ok) throw new Error("Token refresh failed");
   return data; // { id_token, refresh_token, user_id }
 }
- 
+
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function saveAuth(authData) {
   return chrome.storage.local.set({
@@ -47,15 +47,15 @@ function saveAuth(authData) {
     expiresAt:    Date.now() + parseInt(authData.expiresIn) * 1000,
   });
 }
- 
+
 function getAuth() {
   return chrome.storage.local.get(["idToken", "refreshToken", "uid", "email", "expiresAt"]);
 }
- 
+
 function clearAuth() {
   return chrome.storage.local.remove(["idToken", "refreshToken", "uid", "email", "expiresAt"]);
 }
- 
+
 async function getValidToken() {
   const auth = await getAuth();
   if (!auth.idToken) return null;
@@ -73,7 +73,7 @@ async function getValidToken() {
   }
   return auth.idToken;
 }
- 
+
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 function show(id)  { document.getElementById(id).style.display = "flex"; document.getElementById(id).classList.add("active"); }
 function hide(id)  { document.getElementById(id).style.display = "none";  document.getElementById(id).classList.remove("active"); }
@@ -85,14 +85,14 @@ function showOnly(id) {
   show(id);
 }
 function setStatus(msg) { document.getElementById("footerStatus").textContent = msg; }
- 
+
 // ─── CNY → USD pricing ────────────────────────────────────────────────────────
 function calcSuggestedPrice(usdCost, markupPct = 40) {
   const shipping = usdCost < 5 ? 4.5 : usdCost < 15 ? 5.5 : 6.5;
   const ebayFee  = (usdCost + shipping) * 0.135;
   return Math.ceil((usdCost + shipping + ebayFee) * (1 + markupPct / 100) * 10) / 10;
 }
- 
+
 // ─── Fetch stores from DropFlow ───────────────────────────────────────────────
 async function fetchStores(uid, token) {
   const res = await fetch(`${DROPFLOW_API}/api/ebay/stores?userId=${uid}`, {
@@ -101,12 +101,12 @@ async function fetchStores(uid, token) {
   const data = await res.json();
   return data.stores ?? [];
 }
- 
+
 // ─── Get current tab product data via content script ─────────────────────────
 async function getProductFromTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.url?.includes("1688.com")) return null;
- 
+
   // Inject content script to extract product data
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
@@ -114,7 +114,7 @@ async function getProductFromTab() {
   });
   return results?.[0]?.result ?? null;
 }
- 
+
 // ─── This function runs IN the 1688 page context ──────────────────────────────
 function extractProductData() {
   try {
@@ -145,7 +145,7 @@ function extractProductData() {
         .replace(/1688.*$/i, "")
         .trim();
     }
- 
+
     // ── Price — try to find CNY number ───────────────────────────────────────
     // 1688 prices are often in <em> tags or price-specific elements
     let priceCNY = 0;
@@ -165,7 +165,7 @@ function extractProductData() {
         if (num > 0) { priceCNY = num; break; }
       }
     }
- 
+
     // Fallback: scan all <em> tags for a price-like number
     if (!priceCNY) {
       document.querySelectorAll("em").forEach(em => {
@@ -174,61 +174,114 @@ function extractProductData() {
         if (num > 0.5 && num < 10000) priceCNY = num;
       });
     }
- 
+
     // ── Images ───────────────────────────────────────────────────────────────
     const images = [];
     const seen = new Set();
- 
+
     // Main large image first
     const mainSelectors = [
       '[class*="main-image"] img',
       '[class*="mainImage"] img',
-      '[class*="gallery"] img',
       '[class*="detail-image"] img',
       '.img-spot img',
     ];
     for (const sel of mainSelectors) {
       document.querySelectorAll(sel).forEach(img => {
-        const src = img.src?.split("?")[0].replace(/_\d+x\d+\.jpg/, ".jpg");
-        if (src && src.includes("alicdn") && !seen.has(src) && images.length < 8) {
+        const src = img.src?.split("?")[0].replace(/_\d+x\d+\.jpg/, ".jpg").replace(/_.+\.jpg$/, ".jpg");
+        if (src && src.includes("alicdn") && !seen.has(src) && images.length < 12) {
           images.push(src); seen.add(src);
         }
       });
       if (images.length > 0) break;
     }
- 
-    // Also grab any alicdn images from the page
-    if (images.length === 0) {
+
+    // ── Variants — extract structured {name, value, image, price} objects ────
+    // 1688 SKU props are typically in elements with class containing "sku" or "prop"
+    const variantGroups = [];
+
+    // Try to find SKU property groups (e.g. Color, Size)
+    const propGroupSelectors = [
+      '[class*="sku-prop"]',
+      '[class*="skuProp"]',
+      '[class*="sku-item"]',
+      '[class*="prop-item"]',
+      '[class*="attribute-item"]',
+    ];
+
+    const processedGroups = new Set();
+
+    for (const groupSel of propGroupSelectors) {
+      const groups = document.querySelectorAll(groupSel);
+      if (groups.length === 0) continue;
+
+      groups.forEach(group => {
+        // Get the property name (Color, Size, etc.)
+        const nameEl = group.querySelector('[class*="name"], [class*="label"], [class*="title"]');
+        const propName = nameEl?.textContent?.trim() ?? "Option";
+        if (processedGroups.has(propName)) return;
+        processedGroups.add(propName);
+
+        const values = [];
+        // Each value item within this group
+        const itemSelectors = ['[class*="sku-item"]', '[class*="prop-item"]', 'li', 'span[class*="item"]'];
+        for (const itemSel of itemSelectors) {
+          const items = group.querySelectorAll(itemSel);
+          if (items.length === 0) continue;
+          items.forEach(item => {
+            const text = item.textContent?.trim().replace(/\s+/g, " ");
+            if (!text || text.length > 80 || text === propName) return;
+            // Try to get the variant image
+            const img = item.querySelector("img");
+            const imgSrc = img?.src?.split("?")[0].replace(/_.+\.jpg$/, ".jpg") ?? null;
+            if (imgSrc && imgSrc.includes("alicdn") && !seen.has(imgSrc)) {
+              images.push(imgSrc); seen.add(imgSrc);
+            }
+            values.push({ value: text, image: imgSrc });
+          });
+          if (values.length > 0) break;
+        }
+
+        if (values.length > 0) {
+          variantGroups.push({ name: propName, values: values.slice(0, 20) });
+        }
+      });
+      if (variantGroups.length > 0) break;
+    }
+
+    // Fallback: flat list of variant texts if structured extraction failed
+    const variantTexts = new Set();
+    if (variantGroups.length === 0) {
+      const flatSelectors = [
+        '[class*="sku"] [class*="item"]',
+        '[class*="prop"] [class*="item"]',
+        '[class*="attribute"] [class*="item"]',
+      ];
+      for (const sel of flatSelectors) {
+        document.querySelectorAll(sel).forEach(el => {
+          const t = el.textContent?.trim();
+          if (t && t.length < 60 && t.length > 0) variantTexts.add(t);
+        });
+      }
+    }
+
+    // Also grab gallery images if we still need more
+    if (images.length < 4) {
       document.querySelectorAll("img").forEach(img => {
-        const src = img.src?.split("?")[0];
-        if (src && src.includes("alicdn") && !seen.has(src) && images.length < 8) {
+        const src = img.src?.split("?")[0].replace(/_.+\.jpg$/, ".jpg");
+        if (src && src.includes("alicdn") && !seen.has(src) && images.length < 12) {
           images.push(src); seen.add(src);
         }
       });
     }
- 
-    // ── Variants ─────────────────────────────────────────────────────────────
-    const variantTexts = new Set();
-    const varSelectors = [
-      '[class*="sku"] [class*="item"]',
-      '[class*="prop"] [class*="item"]',
-      '[class*="attribute"] [class*="item"]',
-      '[class*="sku-item"]',
-    ];
-    for (const sel of varSelectors) {
-      document.querySelectorAll(sel).forEach(el => {
-        const t = el.textContent?.trim();
-        if (t && t.length < 60 && t.length > 0) variantTexts.add(t);
-      });
-    }
- 
+
     // ── Shop name ─────────────────────────────────────────────────────────────
     const shopEl =
       document.querySelector('[class*="company-name"]') ??
       document.querySelector('[class*="seller-name"]') ??
       document.querySelector('[class*="shop-name"]');
     const shopName = shopEl?.textContent?.trim() ?? "";
- 
+
     // ── Sold count ────────────────────────────────────────────────────────────
     let soldCount = 0;
     document.querySelectorAll("*").forEach(el => {
@@ -237,12 +290,15 @@ function extractProductData() {
       const m = text.match(/(\d+)\s*(?:笔交易|成交|sold)/i);
       if (m) soldCount = parseInt(m[1]);
     });
- 
+
     return {
-      title:     title.slice(0, 200),
+      title:         title.slice(0, 200),
       priceCNY,
-      images:    images.slice(0, 8),
-      variants:  [...variantTexts].slice(0, 20),
+      images:        images.slice(0, 12),
+      variantGroups, // structured: [{name:"Color", values:[{value:"Red", image:"..."}]}]
+      variants:      variantGroups.length > 0
+        ? variantGroups.flatMap(g => g.values.map(v => `${g.name}: ${v.value}`))
+        : [...variantTexts].slice(0, 20),
       shopName,
       soldCount,
       sourceUrl: window.location.href,
@@ -251,42 +307,42 @@ function extractProductData() {
     return { title: "", priceCNY: 0, images: [], variants: [], shopName: "", soldCount: 0, sourceUrl: window.location.href };
   }
 }
- 
+
 // ─── Main init ────────────────────────────────────────────────────────────────
 let currentProduct = null;
 let stores = [];
 const USD_RATE = 0.138; // fallback; ideally fetch from DropFlow
- 
+
 async function init() {
   const auth = await getAuth();
- 
+
   if (!auth.idToken) {
     showOnly("screenLogin");
     document.getElementById("btnLogout").style.display = "none";
     return;
   }
- 
+
   // Logged in
   document.getElementById("userEmail").textContent = auth.email ?? "";
   document.getElementById("btnLogout").style.display = "block";
   setStatus("Logged in");
- 
+
   // Check if on 1688
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const is1688 = tab?.url?.includes("1688.com") && tab?.url?.includes("/offer/");
- 
+
   if (!is1688) {
     showOnly("screenNotOn1688");
     return;
   }
- 
+
   // Extract product data
   showOnly("screenLoading");
   setStatus("Reading product...");
- 
+
   const token = await getValidToken();
   if (!token) { await clearAuth(); showOnly("screenLogin"); return; }
- 
+
   // Load stores
   try {
     stores = await fetchStores(auth.uid, token);
@@ -295,51 +351,60 @@ async function init() {
       `<option value="${s.id}">${s.connected ? "🟢" : "🔴"} ${s.name || s.id}</option>`
     ).join("");
   } catch { /* non-fatal */ }
- 
+
   // Extract product
   const product = await getProductFromTab();
- 
+
   if (!product || !product.title) {
     showOnly("screenNotOn1688");
     document.querySelector("#screenNotOn1688 .info-msg").textContent =
       "⚠️ Could not read product data. Make sure you are on a product detail page.";
     return;
   }
- 
+
   currentProduct = product;
- 
+
   // Calculate prices
   const usdCost   = product.priceCNY * USD_RATE;
   const suggested = calcSuggestedPrice(usdCost);
- 
+
   // Show product
   document.getElementById("productImg").src       = product.images[0] ?? "";
   document.getElementById("productTitle").textContent = product.title;
   document.getElementById("priceCNY").textContent  = `¥${product.priceCNY.toFixed(2)} CNY`;
   document.getElementById("priceUSD").textContent  = `$${usdCost.toFixed(2)}`;
   document.getElementById("priceSuggested").textContent = `→ eBay $${suggested}`;
-  document.getElementById("productVariants").textContent =
-    product.variants.length > 0
-      ? `${product.variants.length} variants: ${product.variants.slice(0, 3).join(", ")}${product.variants.length > 3 ? "..." : ""}`
-      : "No variants";
- 
+
+  // Show variant groups nicely
+  if (product.variantGroups?.length > 0) {
+    const parts = product.variantGroups.map(g =>
+      `${g.name}: ${g.values.slice(0,4).map(v => v.value).join(", ")}${g.values.length > 4 ? "..." : ""}`
+    );
+    document.getElementById("productVariants").textContent = parts.join(" · ");
+  } else if (product.variants?.length > 0) {
+    document.getElementById("productVariants").textContent =
+      `${product.variants.length} variants: ${product.variants.slice(0,3).join(", ")}${product.variants.length > 3 ? "..." : ""}`;
+  } else {
+    document.getElementById("productVariants").textContent = "No variants detected";
+  }
+
   showOnly("screenProduct");
   setStatus("Ready to import");
 }
- 
+
 // ─── Login handler ────────────────────────────────────────────────────────────
 document.getElementById("btnLogin").addEventListener("click", async () => {
   const email    = document.getElementById("loginEmail").value.trim();
   const password = document.getElementById("loginPassword").value;
   const errEl    = document.getElementById("loginError");
   const btn      = document.getElementById("btnLogin");
- 
+
   errEl.style.display = "none";
   if (!email || !password) { errEl.textContent = "Email and password required"; errEl.style.display = "block"; return; }
- 
+
   btn.disabled = true;
   btn.textContent = "Signing in...";
- 
+
   try {
     const auth = await firebaseSignIn(email, password);
     await saveAuth(auth);
@@ -353,12 +418,12 @@ document.getElementById("btnLogin").addEventListener("click", async () => {
     btn.textContent = "Sign In";
   }
 });
- 
+
 // ─── Enter key on password ────────────────────────────────────────────────────
 document.getElementById("loginPassword").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("btnLogin").click();
 });
- 
+
 // ─── Import handler ───────────────────────────────────────────────────────────
 document.getElementById("btnImport").addEventListener("click", async () => {
   if (!currentProduct) return;
@@ -366,22 +431,22 @@ document.getElementById("btnImport").addEventListener("click", async () => {
   const errEl    = document.getElementById("importError");
   const successEl = document.getElementById("importSuccess");
   const storeId  = document.getElementById("storeSelect").value;
- 
+
   if (!storeId) { errEl.textContent = "Select a store first"; errEl.style.display = "block"; return; }
- 
+
   errEl.style.display = "none";
   successEl.style.display = "none";
   btn.disabled = true;
   btn.innerHTML = '<div class="spinner"></div> Adding...';
   setStatus("Importing...");
- 
+
   const auth  = await getAuth();
   const token = await getValidToken();
   if (!token) { await clearAuth(); showOnly("screenLogin"); return; }
- 
+
   const usdCost   = currentProduct.priceCNY * USD_RATE;
   const suggested = calcSuggestedPrice(usdCost);
- 
+
   try {
     const res = await fetch(`${DROPFLOW_API}/api/dropflow/import-extension`, {
       method: "POST",
@@ -390,25 +455,26 @@ document.getElementById("btnImport").addEventListener("click", async () => {
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        userId:     auth.uid,
+        userId:        auth.uid,
         storeId,
-        title:      currentProduct.title,
-        price:      Math.round(usdCost * 100) / 100,
+        title:         currentProduct.title,
+        price:         Math.round(usdCost * 100) / 100,
         suggestedPrice: suggested,
-        shipping:   usdCost < 5 ? 4.5 : usdCost < 15 ? 5.5 : 6.5,
-        cnyPrice:   currentProduct.priceCNY,
-        images:     currentProduct.images,
-        variants:   currentProduct.variants,
-        shopName:   currentProduct.shopName,
-        soldCount:  currentProduct.soldCount,
-        source:     "1688-extension",
+        shipping:      usdCost < 5 ? 4.5 : usdCost < 15 ? 5.5 : 6.5,
+        cnyPrice:      currentProduct.priceCNY,
+        images:        currentProduct.images,
+        variants:      currentProduct.variants,
+        variantGroups: currentProduct.variantGroups ?? [],
+        shopName:      currentProduct.shopName,
+        soldCount:     currentProduct.soldCount,
+        source:        "1688-extension",
         source1688Url: currentProduct.sourceUrl,
       }),
     });
- 
+
     const data = await res.json();
     if (data.error) throw new Error(data.error);
- 
+
     successEl.textContent = "✅ Added to Pending! Open DropFlow to review.";
     successEl.style.display = "block";
     btn.innerHTML = "✅ Added!";
@@ -421,7 +487,7 @@ document.getElementById("btnImport").addEventListener("click", async () => {
     setStatus("Error");
   }
 });
- 
+
 // ─── Logout ───────────────────────────────────────────────────────────────────
 document.getElementById("btnLogout").addEventListener("click", async () => {
   await clearAuth();
@@ -430,7 +496,6 @@ document.getElementById("btnLogout").addEventListener("click", async () => {
   showOnly("screenLogin");
   setStatus("Signed out");
 });
- 
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 init();
- 

@@ -70,12 +70,13 @@ export async function POST(req: NextRequest) {
       userId: string; storeId: string; title: string;
       price: number; suggestedPrice: number; shipping: number;
       cnyPrice?: number; images: string[]; variants?: string[];
+      variantGroups?: { name: string; values: { value: string; image: string | null }[] }[];
       shopName?: string; soldCount?: number; source1688Url?: string;
     };
 
     if (body.userId !== uid) return NextResponse.json({ error: "User mismatch" }, { status: 403 });
 
-    const { storeId, title, price, suggestedPrice, shipping, images, variants, shopName, soldCount, cnyPrice, source1688Url } = body;
+    const { storeId, title, price, suggestedPrice, shipping, images, variants, variantGroups, shopName, soldCount, cnyPrice, source1688Url } = body;
     if (!storeId || !title || !price) return NextResponse.json({ error: "storeId, title, price required" }, { status: 400 });
 
     // Translate Chinese title to English
@@ -95,6 +96,7 @@ export async function POST(req: NextRequest) {
       cnyPrice:             cnyPrice ?? 0,
       images:               (images ?? []).slice(0, 10),
       variants:             variants ?? [],
+      variantGroups:        variantGroups ?? [],
       shopName:             shopName ?? "",
       soldCount:            soldCount ?? 0,
       source:               "1688-extension",
