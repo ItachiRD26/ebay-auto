@@ -119,14 +119,32 @@ async function getProductFromTab() {
 function extractProductData() {
   try {
     // ── Title ────────────────────────────────────────────────────────────────
-    // Try multiple selectors — 1688 changes class names frequently
-    const titleEl =
-      document.querySelector('[class*="title"] h1') ??
-      document.querySelector('h1[class*="title"]') ??
-      document.querySelector('.dt-title') ??
-      document.querySelector('[class*="subject"]') ??
-      document.querySelector('h1');
-    const title = titleEl?.textContent?.trim() ?? document.title.replace(/- 1688.*$/, "").trim();
+    // 1688 product title is usually in a specific h1 or title element
+    // AVOID shop/company name elements
+    let title = "";
+    const titleSelectors = [
+      '[class*="offer-title"]',
+      '[class*="product-title"]',
+      '[class*="detail-title"]',
+      'h1[class*="title"]',
+      '.title-text',
+      '[class*="offerTitle"]',
+    ];
+    for (const sel of titleSelectors) {
+      const el = document.querySelector(sel);
+      const t = el?.textContent?.trim();
+      // Skip if it looks like a company/shop name (contains 厂/公司/店/号)
+      if (t && t.length > 5 && !/厂|公司|店铺|旗舰|号|factory/i.test(t)) {
+        title = t; break;
+      }
+    }
+    // Fallback: use page title (strip 1688 suffix)
+    if (!title) {
+      title = document.title
+        .replace(/[-|].*1688.*$/i, "")
+        .replace(/1688.*$/i, "")
+        .trim();
+    }
  
     // ── Price — try to find CNY number ───────────────────────────────────────
     // 1688 prices are often in <em> tags or price-specific elements
@@ -415,3 +433,4 @@ document.getElementById("btnLogout").addEventListener("click", async () => {
  
 // ─── Start ────────────────────────────────────────────────────────────────────
 init();
+ 

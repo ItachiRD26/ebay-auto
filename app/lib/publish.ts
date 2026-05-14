@@ -546,17 +546,12 @@ export async function publishProductById(productId: string, userToken: string, u
       if (refData.categoryId) refCategoryId = refData.categoryId;
       const merged  = [...refImages];
       refData.imageUrls.forEach((u: string) => { if (!merged.includes(u)) merged.push(u); });
-      // ── Prevent EPS/Self-Hosted mix (eBay error 20004) ──────────────────────
-      // i.ebayimg.com = eBay's EPS CDN belonging to the CN seller's account.
-      // If we mix EPS URLs with external URLs eBay blocks the listing.
-      // Strategy: prefer non-eBay URLs (external CDN). If ALL are eBay CDN, use those only.
       const ebayUrls = merged.filter(u => u.includes("ebayimg.com"));
       const externalUrls = merged.filter(u => !u.includes("ebayimg.com"));
       const dedupedImages = externalUrls.length > 0 ? externalUrls : ebayUrls;
       refImages = dedupedImages.slice(0, 12);
       refVariations = (refData as unknown as ReferenceItemData).variations ?? null;
 
-      // Update real variation price range in Firestore for the product card
       if (refVariations?.variations.length) {
         const varPrices = refVariations.variations.map((v: VariationSpec) => v.refPrice).filter((p: number) => p > 0);
         if (varPrices.length) {
@@ -572,6 +567,35 @@ export async function publishProductById(productId: string, userToken: string, u
         : " | sin variantes";
       console.log(`[publish] ${productId} — ${Object.keys(refAspects).length} aspects, ${refImages.length} images${varInfo}`);
     }
+  } else if (product.source === "1688-extension" || product.source === "1688") {
+    // ── Extension/1688 import — no eBay reference item ─────────────────────
+    // Get category from Taxonomy API using the product title
+    console.log(`[publish] 1688 import — getting category from Taxonomy API`);
+    if (!refCategoryId && product.title) {
+      try {
+        const taxRes = await fetch(
+          `https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=EBAY_US`,
+          { headers: { Authorization: `Bearer ${await getAppToken()}` } }
+        );
+        const taxData = await taxRes.json() as { categoryTreeId?: string };
+        const treeId  = taxData.categoryTreeId ?? "0";
+
+        const sugRes  = await fetch(
+          `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions?q=${encodeURIComponent(String(product.title).slice(0, 60))}`,
+          { headers: { Authorization: `Bearer ${await getAppToken()}` } }
+        );
+        const sugData = await sugRes.json() as { categorySuggestions?: { category?: { categoryId?: string } }[] };
+        const catId   = sugData.categorySuggestions?.[0]?.category?.categoryId;
+        if (catId) {
+          refCategoryId = catId;
+          console.log(`[publish] Taxonomy suggested category: ${catId}`);
+        }
+      } catch (e) { console.warn("[publish] Taxonomy API failed:", e); }
+    }
+
+    // Use images from the product directly (already saved by extension)
+    refImages = (product.images as string[] | undefined) ?? [];
+    console.log(`[publish] 1688 extension: category=${refCategoryId} images=${refImages.length}`);
   }
 
   // ── Step 2: Markup ratio ──────────────────────────────────────────────────
