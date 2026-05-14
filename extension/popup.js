@@ -94,8 +94,9 @@ async function fetchCnyRate() {
 
 function calcPricing(priceCNY) {
   const landedCNY = priceCNY * (1 + OVERHEAD_PCT);
-  const landedUSD = landedCNY * _cnyUsdRate * (1 + BANK_FEE_PCT);
-  const covered   = landedUSD / (1 - EBAY_FEE_PCT);  // gross up for eBay fee
+  const landedUSD = landedCNY * _cnyUsdRate * (1 + BANK_FEE_PCT); // Eprolo USD price
+  const totalCost = landedUSD + SHIP_DEFAULT;                      // shipping embedded (free shipping on eBay)
+  const covered   = totalCost / (1 - EBAY_FEE_PCT);               // gross up for eBay fee
   const ebayPrice = Math.max(
     Math.ceil(covered * (1 + PROFIT_MARKUP) * 100) / 100,
     MIN_PRICE
@@ -103,8 +104,8 @@ function calcPricing(priceCNY) {
   return {
     landedCNY: Math.round(landedCNY * 100) / 100,
     landedUSD: Math.round(landedUSD * 100) / 100,
+    totalCost: Math.round(totalCost * 100) / 100,
     ebayPrice,
-    shipping:  SHIP_DEFAULT,
     rate:      _cnyUsdRate,
   };
 }
@@ -357,9 +358,9 @@ async function init() {
   tryNextImg();
 
   document.getElementById("productTitle").textContent   = product.title;
-  document.getElementById("priceCNY").textContent       = `¥${product.priceCNY.toFixed(2)} → ¥${pricing.landedCNY.toFixed(2)} CNY`;
-  document.getElementById("priceUSD").textContent       = `$${pricing.landedUSD.toFixed(2)} cost`;
-  document.getElementById("priceSuggested").textContent = `→ eBay $${pricing.ebayPrice.toFixed(2)} + ship $${pricing.shipping.toFixed(2)}`;
+  document.getElementById("priceCNY").textContent       = `¥${product.priceCNY.toFixed(2)} → ¥${pricing.landedCNY.toFixed(2)} CNY (Eprolo)`;
+  document.getElementById("priceUSD").textContent       = `Eprolo $${pricing.landedUSD.toFixed(2)} + ship $${(pricing.totalCost - pricing.landedUSD).toFixed(2)} = $${pricing.totalCost.toFixed(2)}`;
+  document.getElementById("priceSuggested").textContent = `eBay $${pricing.ebayPrice.toFixed(2)} · Free shipping`;
   document.getElementById("productVariants").textContent =
     product.variantGroups?.length > 0
       ? product.variantGroups.map(g => `${g.name}: ${g.values.slice(0,4).map(v=>v.value).join(", ")}${g.values.length>4?"...":""}`).join(" · ")
@@ -418,9 +419,9 @@ document.getElementById("btnImport").addEventListener("click", async () => {
       body: JSON.stringify({
         userId: auth.uid, storeId,
         title: currentProduct.title,
-        price:          pricing.landedUSD,       // our cost in USD (after overhead + bank fee)
-        suggestedPrice: pricing.ebayPrice,       // eBay listing price (covers eBay 13.5% fee)
-        shipping:       pricing.shipping,        // carrier estimate ($8.50 default)
+        price:          pricing.landedUSD,       // Eprolo USD cost
+        suggestedPrice: pricing.ebayPrice,       // eBay listing price (shipping embedded)
+        shipping:       0,                       // free shipping — already in ebayPrice
         cnyPrice:       currentProduct.priceCNY,
         landedCNY:      pricing.landedCNY,       // CNY with overhead (for records)
         exchangeRate:   pricing.rate,            // rate used for transparency
