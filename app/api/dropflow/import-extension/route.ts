@@ -107,7 +107,7 @@ export async function POST(req: NextRequest) {
       updatedAt:            Date.now(),
     });
 
-    console.log(`[extension] ✅ "${title.slice(0, 50)}" → ${uid} / ${storeId}`);
+    console.log(`[extension] ✅ "${finalTitle.slice(0, 50)}" → ${uid} / ${storeId} | images=${(images??[]).length} variantGroups=${(variantGroups??[]).length}`);
     return NextResponse.json({ success: true, productId: docRef.id });
 
   } catch (e) {

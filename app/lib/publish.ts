@@ -210,6 +210,8 @@ async function addFixedPriceItem(product: {
   title: string; description: string; categoryId: string; categoryType?: import("@/lib/category-aspects").CategoryType; price: number;
   stock: number; images: string[]; condition: string; aspects: Record<string, string[]>;
   variations?: VariationsData | null; markupRatio?: number;
+  variantGroups?: { name: string; values: { value: string; image: string | null }[] }[];
+  suggestedSellingPrice?: number; totalMarketCost?: number; markupPercent?: number;
   fulfillmentPolicyId?: string; paymentPolicyId?: string; returnPolicyId?: string;
   itemCountry?: string; itemLocation?: string;
 }, userToken: string): Promise<{ itemId: string }> {
@@ -265,10 +267,31 @@ async function addFixedPriceItem(product: {
   }
 
   const rawVarData = product.variations;
+
+  // For extension/1688 imports: if no product.variations, build from variantGroups
+  const _vg = product.variantGroups ?? [];
+  const _extVar: VariationsData | null = _vg.length === 0 ? null : (() => {
+    const picDim = _vg.find(g => g.values.some(v => v.image)) ?? _vg[0];
+    const specificsSet: Record<string, string[]> = {};
+    for (const g of _vg) specificsSet[g.name] = g.values.map(v => v.value).filter(Boolean);
+    const picturesByVariant: Record<string, string[]> = {};
+    for (const v of picDim.values) { if (v.image && v.value) picturesByVariant[v.value] = [v.image]; }
+    let combos: Record<string, string>[] = [{}];
+    for (const g of _vg) {
+      const exp: Record<string, string>[] = [];
+      for (const ex of combos) for (const v of g.values) exp.push({ ...ex, [g.name]: v.value });
+      combos = exp;
+    }
+    combos = combos.slice(0, 50); // cap at 50 before MAX_VARIATIONS applied later
+    const suggestedUSD = product.suggestedSellingPrice ?? product.totalMarketCost ?? 0;
+    const mkup = 1 + ((product.markupPercent ?? 6) / 100);
+    const refPrice = mkup > 0 ? suggestedUSD / mkup : suggestedUSD;
+    return { variations: combos.map(s => ({ specifics: s, refPrice })), specificsSet, picturesByVariant, pictureDimension: picDim.name };
+  })();
   // Apply cleaning to variation specifics
-  let varData: VariationsData | null = rawVarData ? {
-    ...rawVarData,
-    variations: rawVarData.variations
+  let varData: VariationsData | null = (rawVarData ?? _extVar) ? {
+    ...(rawVarData ?? _extVar)!,
+    variations: (rawVarData ?? _extVar)!.variations
       .map((v: VariationSpec) => ({
         ...v,
         specifics: Object.fromEntries(
@@ -279,7 +302,7 @@ async function addFixedPriceItem(product: {
       }))
       .filter((v: VariationSpec) => Object.keys(v.specifics).length > 0),
     specificsSet: Object.fromEntries(
-      Object.entries(rawVarData.specificsSet)
+      Object.entries((rawVarData ?? _extVar)!.specificsSet)
         .map(([key, vals]) => [
           key,
           (vals as string[]).map(cleanVariationValue).filter(v => v.length > 0),
@@ -287,7 +310,7 @@ async function addFixedPriceItem(product: {
         .filter(([_, vals]) => (vals as string[]).length > 0)
     ),
     picturesByVariant: Object.fromEntries(
-      Object.entries(rawVarData.picturesByVariant)
+      Object.entries((rawVarData ?? _extVar)!.picturesByVariant)
         .map(([key, urls]) => [cleanVariationValue(key), urls])
         .filter(([key]) => (key as string).length > 0)
     ),
@@ -600,57 +623,6 @@ export async function publishProductById(productId: string, userToken: string, u
     }
 
     refImages = (product.images as string[] | undefined) ?? [];
-
-    // ── Convert variantGroups → VariationsData format ─────────────────────
-    // variantGroups: [{name:"Color", values:[{value:"Red", image:"url"}]}, ...]
-    type VG = { name: string; values: { value: string; image: string | null }[] };
-    const variantGroups = (product.variantGroups as VG[] | undefined) ?? [];
-
-    if (variantGroups.length > 0) {
-      // Find the dimension that has images (usually Color)
-      const picDimension = variantGroups.find(g => g.values.some(v => v.image)) ?? variantGroups[0];
-
-      // Build specificsSet: { Color: ["Red","Blue"], Size: ["36","37"] }
-      const specificsSet: Record<string, string[]> = {};
-      for (const g of variantGroups) {
-        specificsSet[g.name] = g.values.map(v => v.value).filter(Boolean);
-      }
-
-      // Build picturesByVariant: { "Red": ["url1"], "Blue": ["url2"] }
-      const picturesByVariant: Record<string, string[]> = {};
-      for (const v of picDimension.values) {
-        if (v.image && v.value) picturesByVariant[v.value] = [v.image];
-      }
-
-      // Build all variation combinations (Color × Size × ...)
-      const combinations: Record<string, string>[] = [{}];
-      for (const g of variantGroups) {
-        const expanded: Record<string, string>[] = [];
-        for (const existing of combinations) {
-          for (const v of g.values) {
-            expanded.push({ ...existing, [g.name]: v.value });
-          }
-        }
-        combinations.splice(0, combinations.length, ...expanded);
-      }
-
-      // Cap at MAX_VARIATIONS
-      const cappedCombinations = combinations.slice(0, MAX_VARIATIONS);
-      const suggestedUSD = (product.suggestedSellingPrice as number) || (product.totalMarketCost as number) || 0;
-
-      refVariations = {
-        variations: cappedCombinations.map(specifics => ({
-          specifics,
-          refPrice: suggestedUSD,
-        })),
-        specificsSet,
-        picturesByVariant,
-        pictureDimension: picDimension.name,
-      };
-
-      console.log(`[publish] 1688 variants: ${cappedCombinations.length} combos, dimension="${picDimension.name}", pics=${Object.keys(picturesByVariant).length}`);
-    }
-
     console.log(`[publish] 1688 extension: category=${refCategoryId} images=${refImages.length}`);
   }
 
@@ -774,6 +746,10 @@ Return ONLY JSON: {"title":"safe rewritten title max 80 chars","description":"2-
       stock: (product.stock ?? 10), images: refImages,
       condition: product.condition ?? "New", aspects: publishAspects,
       variations: refVariations, markupRatio,
+      variantGroups:        (product.variantGroups as { name: string; values: { value: string; image: string | null }[] }[] | undefined),
+      suggestedSellingPrice: product.suggestedSellingPrice as number | undefined,
+      totalMarketCost:       product.totalMarketCost as number | undefined,
+      markupPercent:         product.markupPercent as number | undefined,
       fulfillmentPolicyId: policies.fulfillmentPolicyId,
       paymentPolicyId:     policies.paymentPolicyId,
       returnPolicyId:      policies.returnPolicyId,
