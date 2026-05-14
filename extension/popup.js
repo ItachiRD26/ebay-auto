@@ -91,114 +91,169 @@ async function fetchStores(uid, token) {
 function extractProductData() {
   try {
 
-    // cleanImg MUST be defined inside this function
-    function cleanImg(el) {
-      if (!el) return null;
-      // 1688 lazy-loads — data-src has the real URL
-      const raw = el.getAttribute("data-src") || el.getAttribute("src") || "";
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function cleanUrl(raw) {
       if (!raw || !raw.includes("alicdn")) return null;
       let url = raw.startsWith("//") ? "https:" + raw : raw;
-      url = url.split("?")[0];
-      // Remove numeric size suffix only: _60x60.jpg, _400x400xz.jpg
-      url = url.replace(/_\d+x\d+[a-z]?\.(jpg|jpeg|png|webp)$/i, ".$1");
+      url = url.split("?")[0].split("_.")[0]; // strip alicdn resize suffixes
+      if (!url.match(/\.(jpg|jpeg|png|webp)$/i)) url = url.replace(/(_[a-z0-9]+)?$/, ".jpg");
       return url;
     }
+    function cleanImg(el) {
+      if (!el) return null;
+      const raw = el.getAttribute("data-src") || el.getAttribute("src") || "";
+      return cleanUrl(raw);
+    }
+    const images = [], seen = new Set();
+    function addImg(src) {
+      const clean = typeof src === "string" && src.includes("alicdn") ? cleanUrl(src) : src;
+      if (clean && !seen.has(clean) && images.length < 12) { images.push(clean); seen.add(clean); }
+    }
+
+    // ── PRIMARY: read from window.context (embedded JSON in page) ────────────
+    // 1688 inlines ALL product data as window.context — far more reliable than DOM scraping
+    const ctx = window.context?.result;
+    const globalModel  = ctx?.global?.globalData?.model ?? {};
+    const offerDetail  = globalModel.offerDetail ?? {};
+    const tradeModel   = globalModel.tradeModel ?? {};
+    const dataJson     = ctx?.data?.Root?.fields?.dataJson ?? {};
+    const galleryFields = ctx?.data?.gallery?.fields ?? {};
 
     // ── Title ────────────────────────────────────────────────────────────────
-    let title = "";
-    for (const sel of ['[class*="offer-title"]','[class*="product-title"]','[class*="detail-title"]','h1[class*="title"]','.title-text','[class*="offerTitle"]']) {
-      const t = document.querySelector(sel)?.textContent?.trim();
-      if (t && t.length > 5 && !/厂|公司|店铺|旗舰|号|factory/i.test(t)) { title = t; break; }
+    let title = offerDetail.subject
+             || dataJson.tempModel?.offerTitle
+             || ctx?.data?.productTitle?.fields?.title
+             || "";
+    if (!title) {
+      for (const sel of ['.title-text','[class*="title-text"]','[class*="offer-title"]','h1']) {
+        const t = document.querySelector(sel)?.textContent?.trim();
+        if (t && t.length > 5) { title = t; break; }
+      }
     }
-    if (!title) title = document.title.replace(/[-|].*1688.*$/i,"").replace(/1688.*$/i,"").trim();
+    if (!title) title = document.title.replace(/[-|].*$/,"").trim();
 
     // ── Price ─────────────────────────────────────────────────────────────────
-    let priceCNY = 0;
-    for (const sel of ['[class*="price-range"] em','[class*="price"] em','[class*="Price"] em','[class*="price-number"]','[class*="priceText"]','.price em','em[class*="price"]']) {
-      const num = parseFloat(document.querySelector(sel)?.textContent?.replace(/[^\d.]/g,"") ?? "0");
-      if (num > 0) { priceCNY = num; break; }
-    }
+    let priceCNY = parseFloat(tradeModel.minPrice ?? 0)
+                || parseFloat(dataJson.orderParamModel?.orderParam?.skuParam?.skuRangePrices?.[0]?.price ?? 0)
+                || 0;
     if (!priceCNY) {
-      document.querySelectorAll("em").forEach(em => {
-        if (priceCNY) return;
-        const num = parseFloat(em.textContent?.replace(/[^\d.]/g,"") ?? "0");
-        if (num > 0.5 && num < 10000) priceCNY = num;
-      });
+      // DOM fallback — look for price in em tags inside price containers
+      for (const sel of ['[class*="price"] em','em[class*="price"]','.price-num']) {
+        const num = parseFloat(document.querySelector(sel)?.textContent?.replace(/[^\d.]/g,"") ?? "0");
+        if (num > 0) { priceCNY = num; break; }
+      }
+      if (!priceCNY) {
+        document.querySelectorAll("em").forEach(em => {
+          if (priceCNY) return;
+          const num = parseFloat(em.textContent?.replace(/[^\d.]/g,"") ?? "0");
+          if (num > 0.5 && num < 50000) priceCNY = num;
+        });
+      }
     }
 
     // ── Images ───────────────────────────────────────────────────────────────
-    const images = [], seen = new Set();
-    function addImg(src) {
-      if (src && !seen.has(src) && images.length < 12) { images.push(src); seen.add(src); }
-    }
+    // From window.context gallery (most reliable — full-size URLs)
+    const ctxImgs = galleryFields.offerImgList ?? galleryFields.mainImage ?? [];
+    ctxImgs.forEach(u => addImg(u));
 
-    // Main images
-    for (const sel of ['[class*="main-image"] img','[class*="mainImage"] img','[class*="detail-image"] img','[class*="preview"] img','.img-spot img']) {
-      document.querySelectorAll(sel).forEach(img => addImg(cleanImg(img)));
-      if (images.length > 0) break;
+    // Also grab skuProp images from context
+    const ctxSkuProps = offerDetail.skuProps ?? dataJson.skuModel?.skuProps ?? [];
+    ctxSkuProps.forEach(prop => {
+      (prop.value ?? []).forEach(v => { if (v.imageUrl) addImg(v.imageUrl); });
+    });
+
+    // DOM fallback for images if context gave us nothing
+    if (images.length < 3) {
+      for (const sel of [
+        '[class*="main-image"] img', '[class*="mainImage"] img',
+        '[class*="gallery"] img',    '[class*="preview"] img',
+        '.img-spot img',
+      ]) {
+        document.querySelectorAll(sel).forEach(img => addImg(cleanImg(img)));
+        if (images.length >= 3) break;
+      }
+      if (images.length < 3) {
+        document.querySelectorAll("img").forEach(img => addImg(cleanImg(img)));
+      }
     }
 
     // ── Variants ─────────────────────────────────────────────────────────────
-    const variantGroups = [], processedGroups = new Set();
+    const variantGroups = [];
 
-    for (const groupSel of ['[class*="sku-prop"]','[class*="skuProp"]','[class*="sku-item"]','[class*="prop-item"]','[class*="attribute-item"]']) {
-      const groups = document.querySelectorAll(groupSel);
-      if (!groups.length) continue;
-      groups.forEach(group => {
-        const propName = group.querySelector('[class*="name"],[class*="label"],[class*="title"]')?.textContent?.trim() ?? "Option";
-        if (processedGroups.has(propName)) return;
-        processedGroups.add(propName);
+    // PRIMARY: read from window.context skuProps — always has correct data
+    // Path 1: offerDetail.skuProps  (most pages)
+    // Path 2: dataJson.skuModel.skuProps  (alternative path)
+    const skuProps = (ctxSkuProps.length > 0) ? ctxSkuProps : [];
+
+    skuProps.forEach(prop => {
+      const name = prop.prop ?? prop.name ?? "Option";
+      const values = (prop.value ?? [])
+        .map(v => ({ value: v.name ?? v.value ?? "", image: v.imageUrl ?? null }))
+        .filter(v => v.value);
+      if (values.length) variantGroups.push({ name, values: values.slice(0, 20) });
+    });
+
+    // FALLBACK: DOM scraping if context had no skuProps
+    // 1688 renders variants as: .sku-filter-button > .label-name  (with optional .ant-image-img)
+    // Groups are wrapped in a container that has a sibling prop-name element
+    if (!variantGroups.length) {
+      // Each prop group is a container with a title and buttons
+      const groupContainers = document.querySelectorAll(
+        '[class*="SkuItem"], [class*="sku-select-item"], [class*="skuSelectItem"], [class*="prop-wrap"], [class*="propWrap"]'
+      );
+      groupContainers.forEach(group => {
+        const propName = (
+          group.querySelector('[class*="prop-title"], [class*="propTitle"], [class*="sku-name"]')
+          ?? group.previousElementSibling
+        )?.textContent?.trim() ?? "Option";
+
         const values = [];
-        for (const itemSel of ['[class*="sku-item"]','[class*="prop-item"]','li','span[class*="item"]']) {
-          const items = group.querySelectorAll(itemSel);
-          if (!items.length) continue;
-          items.forEach(item => {
-            const text = item.textContent?.trim().replace(/\s+/g," ");
-            if (!text || text.length > 80 || text === propName) return;
-            const imgSrc = cleanImg(item.querySelector("img"));
-            if (imgSrc) addImg(imgSrc);
-            values.push({ value: text, image: imgSrc });
-          });
-          if (values.length) break;
-        }
-        if (values.length) variantGroups.push({ name: propName, values: values.slice(0,20) });
+        // Each clickable option: button.sku-filter-button > span.label-name
+        group.querySelectorAll('.sku-filter-button, [class*="filter-button"], [class*="filterButton"]').forEach(btn => {
+          const text = btn.querySelector('.label-name, [class*="label-name"]')?.textContent?.trim()
+                    ?? btn.textContent?.trim();
+          if (!text || text.length > 80) return;
+          const imgEl = btn.querySelector('img.ant-image-img, img[class*="image"]');
+          const imgSrc = imgEl ? cleanImg(imgEl) : null;
+          if (imgSrc) addImg(imgSrc);
+          values.push({ value: text, image: imgSrc });
+        });
+        if (values.length) variantGroups.push({ name: propName, values: values.slice(0, 20) });
       });
-      if (variantGroups.length) break;
     }
 
-    // Fallback — grab all alicdn images
-    if (images.length < 4) {
-      document.querySelectorAll("img").forEach(img => addImg(cleanImg(img)));
-    }
-
-    // Flat variant fallback
+    // Last-resort flat variant text collect
     const variantTexts = new Set();
     if (!variantGroups.length) {
-      ["[class*='sku'] [class*='item']","[class*='prop'] [class*='item']"].forEach(sel => {
-        document.querySelectorAll(sel).forEach(el => { const t = el.textContent?.trim(); if (t && t.length < 60) variantTexts.add(t); });
+      document.querySelectorAll('.sku-filter-button .label-name, [class*="label-name"]').forEach(el => {
+        const t = el.textContent?.trim();
+        if (t && t.length < 80) variantTexts.add(t);
       });
     }
 
     // ── Shop / Sold ───────────────────────────────────────────────────────────
-    const shopName = (document.querySelector('[class*="company-name"],[class*="seller-name"],[class*="shop-name"]'))?.textContent?.trim() ?? "";
-    let soldCount = 0;
-    document.querySelectorAll("*").forEach(el => {
-      if (soldCount) return;
-      const m = (el.textContent??"").match(/(\d+)\s*(?:笔交易|成交|sold)/i);
-      if (m) soldCount = parseInt(m[1]);
-    });
+    const shopName = globalModel.sellerModel?.loginId
+                  || dataJson.tempModel?.sellerLoginId
+                  || document.querySelector('[class*="company-name"],[class*="shop-name"],[class*="seller-name"]')?.textContent?.trim()
+                  || "";
+    const soldCount = dataJson.tempModel?.saledCount
+                   || tradeModel.saleCount
+                   || 0;
 
     return {
-      title: title.slice(0,200), priceCNY,
-      images: images.slice(0,12),
+      title: title.slice(0, 200),
+      priceCNY,
+      images: images.slice(0, 12),
       variantGroups,
       variants: variantGroups.length > 0
         ? variantGroups.flatMap(g => g.values.map(v => `${g.name}: ${v.value}`))
-        : [...variantTexts].slice(0,20),
-      shopName, soldCount, sourceUrl: window.location.href,
+        : [...variantTexts].slice(0, 20),
+      shopName,
+      soldCount,
+      sourceUrl: window.location.href,
     };
   } catch(e) {
-    return { title:"", priceCNY:0, images:[], variantGroups:[], variants:[], shopName:"", soldCount:0, sourceUrl: window.location.href };
+    return { title:"", priceCNY:0, images:[], variantGroups:[], variants:[], shopName:"", soldCount:0, sourceUrl: window.location.href, _err: e.message };
   }
 }
 
