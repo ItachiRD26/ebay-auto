@@ -179,6 +179,20 @@ function extractProductData() {
     const images = [];
     const seen = new Set();
 
+    // Clean alicdn URL — remove query params but keep the path intact
+    // alicdn URLs look like: //cbu01.alicdn.com/img/ibank/.../photo.jpg
+    // Sometimes they have size suffixes like _60x60.jpg — only remove those
+    function cleanImgUrl(src) {
+      if (!src) return null;
+      // Ensure absolute URL
+      let url = src.startsWith("//") ? "https:" + src : src;
+      // Remove query string
+      url = url.split("?")[0];
+      // Remove size suffix like _60x60xz.jpg or _400x400.jpg — only numeric size patterns
+      url = url.replace(/_\d+x\d+[a-z]?\.(jpg|jpeg|png|webp)$/i, ".$1");
+      return url;
+    }
+
     // Main large image first
     const mainSelectors = [
       '[class*="main-image"] img',
@@ -188,7 +202,7 @@ function extractProductData() {
     ];
     for (const sel of mainSelectors) {
       document.querySelectorAll(sel).forEach(img => {
-        const src = img.src?.split("?")[0].replace(/_\d+x\d+\.jpg/, ".jpg").replace(/_.+\.jpg$/, ".jpg");
+        const src = cleanImgUrl(img.src ?? img.dataset?.src ?? img.getAttribute("src"));
         if (src && src.includes("alicdn") && !seen.has(src) && images.length < 12) {
           images.push(src); seen.add(src);
         }
@@ -233,7 +247,7 @@ function extractProductData() {
             if (!text || text.length > 80 || text === propName) return;
             // Try to get the variant image
             const img = item.querySelector("img");
-            const imgSrc = img?.src?.split("?")[0].replace(/_.+\.jpg$/, ".jpg") ?? null;
+            const imgSrc = img ? cleanImgUrl(img.src ?? img.dataset?.src) : null;
             if (imgSrc && imgSrc.includes("alicdn") && !seen.has(imgSrc)) {
               images.push(imgSrc); seen.add(imgSrc);
             }
@@ -268,7 +282,7 @@ function extractProductData() {
     // Also grab gallery images if we still need more
     if (images.length < 4) {
       document.querySelectorAll("img").forEach(img => {
-        const src = img.src?.split("?")[0].replace(/_.+\.jpg$/, ".jpg");
+        const src = cleanImgUrl(img.src ?? img.dataset?.src);
         if (src && src.includes("alicdn") && !seen.has(src) && images.length < 12) {
           images.push(src); seen.add(src);
         }
@@ -369,7 +383,14 @@ async function init() {
   const suggested = calcSuggestedPrice(usdCost);
 
   // Show product
-  document.getElementById("productImg").src       = product.images[0] ?? "";
+  const imgEl = document.getElementById("productImg");
+  imgEl.src = product.images[0] ?? "";
+  imgEl.onerror = () => {
+    // Try next image if first fails
+    const next = product.images[1] ?? "";
+    if (next && imgEl.src !== next) imgEl.src = next;
+    else imgEl.style.display = "none";
+  };
   document.getElementById("productTitle").textContent = product.title;
   document.getElementById("priceCNY").textContent  = `¥${product.priceCNY.toFixed(2)} CNY`;
   document.getElementById("priceUSD").textContent  = `$${usdCost.toFixed(2)}`;
