@@ -569,11 +569,10 @@ export async function publishProductById(productId: string, userToken: string, u
     }
   } else if (product.source === "1688-extension" || product.source === "1688") {
     // ── Extension/1688 import — no eBay reference item ─────────────────────
-    // Get category from Taxonomy API using the product title
     console.log(`[publish] 1688 import — getting category from Taxonomy API`);
     if (!refCategoryId && product.title) {
       try {
-        const taxRes = await fetch(
+        const taxRes  = await fetch(
           `https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=EBAY_US`,
           { headers: { Authorization: `Bearer ${await getAppToken()}` } }
         );
@@ -584,16 +583,23 @@ export async function publishProductById(productId: string, userToken: string, u
           `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions?q=${encodeURIComponent(String(product.title).slice(0, 60))}`,
           { headers: { Authorization: `Bearer ${await getAppToken()}` } }
         );
-        const sugData = await sugRes.json() as { categorySuggestions?: { category?: { categoryId?: string } }[] };
-        const catId   = sugData.categorySuggestions?.[0]?.category?.categoryId;
+        const sugData = await sugRes.json() as { categorySuggestions?: { category?: { categoryId?: string; categoryName?: string } }[] };
+
+        // Skip categories that require book-specific aspects (Language, Book Title, Author)
+        const BOOK_CATS = new Set(["267", "261186", "11232", "171228", "183454"]);
+        const goodSuggestion = sugData.categorySuggestions?.find(s => {
+          const id = s.category?.categoryId ?? "";
+          return !BOOK_CATS.has(id);
+        });
+
+        const catId = goodSuggestion?.category?.categoryId;
         if (catId) {
           refCategoryId = catId;
-          console.log(`[publish] Taxonomy suggested category: ${catId}`);
+          console.log(`[publish] Taxonomy suggested category: ${catId} (${goodSuggestion?.category?.categoryName})`);
         }
       } catch (e) { console.warn("[publish] Taxonomy API failed:", e); }
     }
 
-    // Use images from the product directly (already saved by extension)
     refImages = (product.images as string[] | undefined) ?? [];
     console.log(`[publish] 1688 extension: category=${refCategoryId} images=${refImages.length}`);
   }

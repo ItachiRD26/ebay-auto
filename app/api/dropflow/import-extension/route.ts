@@ -18,6 +18,42 @@ async function verifyFirebaseToken(idToken: string): Promise<string | null> {
   } catch { return null; }
 }
 
+// ─── Detect if string contains Chinese characters ─────────────────────────────
+function hasChinese(text: string): boolean {
+  return /[\u4e00-\u9fff]/.test(text);
+}
+
+// ─── Translate title to English with Claude Haiku ─────────────────────────────
+async function translateTitle(title: string): Promise<string> {
+  if (!hasChinese(title)) return title;
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 120,
+        messages: [{
+          role: "user",
+          content: `Translate this 1688.com product title to English for an eBay listing. Return ONLY the translated title, nothing else, max 80 characters:\n\n${title}`,
+        }],
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const data = await res.json() as { content?: { text: string }[] };
+    const translated = data?.content?.[0]?.text?.trim() ?? title;
+    console.log(`[extension] Translated: "${title.slice(0,40)}" → "${translated.slice(0,40)}"`);
+    return translated;
+  } catch {
+    console.warn("[extension] Translation failed, keeping original");
+    return title;
+  }
+}
+
 // ─── POST /api/dropflow/import-extension ─────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
@@ -42,9 +78,12 @@ export async function POST(req: NextRequest) {
     const { storeId, title, price, suggestedPrice, shipping, images, variants, shopName, soldCount, cnyPrice, source1688Url } = body;
     if (!storeId || !title || !price) return NextResponse.json({ error: "storeId, title, price required" }, { status: 400 });
 
+    // Translate Chinese title to English
+    const finalTitle = await translateTitle(title);
+
     const docRef = queueCol(uid).doc();
     await docRef.set({
-      title:                title.slice(0, 200),
+      title:                finalTitle.slice(0, 200),
       // Fields ProductCard reads for prices
       totalMarketCost:      Math.round(price * 100) / 100,  // USD cost → "Ref. eBay" base
       suggestedSellingPrice: suggestedPrice,                 // → "Tu precio"
