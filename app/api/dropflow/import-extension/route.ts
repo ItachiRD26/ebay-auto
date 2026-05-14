@@ -69,14 +69,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as {
       userId: string; storeId: string; title: string;
       price: number; suggestedPrice: number; shipping: number;
-      cnyPrice?: number; images: string[]; variants?: string[];
+      cnyPrice?: number; landedCNY?: number; exchangeRate?: number;
+      images: string[]; variants?: string[];
       variantGroups?: { name: string; values: { value: string; image: string | null }[] }[];
       shopName?: string; soldCount?: number; source1688Url?: string;
     };
 
     if (body.userId !== uid) return NextResponse.json({ error: "User mismatch" }, { status: 403 });
 
-    const { storeId, title, price, suggestedPrice, shipping, images, variants, variantGroups, shopName, soldCount, cnyPrice, source1688Url } = body;
+    const { storeId, title, price, suggestedPrice, shipping, images, variants, variantGroups, shopName, soldCount, cnyPrice, landedCNY, exchangeRate, source1688Url } = body;
     if (!storeId || !title || !price) return NextResponse.json({ error: "storeId, title, price required" }, { status: 400 });
 
     // Translate Chinese title to English
@@ -86,14 +87,16 @@ export async function POST(req: NextRequest) {
     await docRef.set({
       title:                finalTitle.slice(0, 200),
       // Fields ProductCard reads for prices
-      totalMarketCost:      Math.round(price * 100) / 100,  // USD cost → "Ref. eBay" base
-      suggestedSellingPrice: suggestedPrice,                 // → "Tu precio"
-      ebayReferencePrice:   suggestedPrice,                  // fallback ref price
-      // Raw data fields
+      totalMarketCost:      Math.round(price * 100) / 100,  // landed USD cost (after overhead + bank fee)
+      suggestedSellingPrice: suggestedPrice,                 // eBay listing price (after 13.5% eBay fee)
+      ebayReferencePrice:   suggestedPrice,
+      // Raw pricing breakdown (for transparency / audit)
       price:                Math.round(price * 100) / 100,
       suggestedPrice,
-      shipping,
-      cnyPrice:             cnyPrice ?? 0,
+      shipping,                                              // carrier estimate (~$8.50, separate eBay charge)
+      cnyPrice:             cnyPrice ?? 0,                   // original 1688 price in CNY
+      landedCNY:            landedCNY ?? 0,                  // CNY price + 12% overhead
+      exchangeRate:         exchangeRate ?? 0.138,           // CNY→USD rate used
       images:               (images ?? []).slice(0, 10),
       variants:             variants ?? [],
       variantGroups:        variantGroups ?? [],

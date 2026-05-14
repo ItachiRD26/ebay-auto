@@ -70,11 +70,43 @@ function showOnly(id) {
 }
 function setStatus(msg) { document.getElementById("footerStatus").textContent = msg; }
 
-// ─── Pricing ──────────────────────────────────────────────────────────────────
-function calcSuggestedPrice(usdCost, markupPct = 40) {
-  const shipping = usdCost < 5 ? 4.5 : usdCost < 15 ? 5.5 : 6.5;
-  const ebayFee  = (usdCost + shipping) * 0.135;
-  return Math.ceil((usdCost + shipping + ebayFee) * (1 + markupPct / 100) * 10) / 10;
+// ─── Pricing ──────────────────────────────────────────────────────────────────────────────
+// Formula:
+//  1. landedCNY = priceCNY × 1.12   (12% overhead: factory→WH, QC, packing, labour)
+//  2. landedUSD = landedCNY × rate × 1.02  (live spot rate + 2% bank wire fee)
+//  3. ebayPrice = landedUSD / (1 − 0.135)  (seller nets landedUSD after eBay 13.5% cut)
+//  Shipping ($7–$15) is a separate carrier charge — NOT embedded in listing price.
+const OVERHEAD_PCT  = 0.12;
+const BANK_FEE_PCT  = 0.02;
+const EBAY_FEE_PCT  = 0.135;
+const PROFIT_MARKUP = 0.35;   // 35% profit (midpoint 30-40%)
+const MIN_PRICE     = 19.99;  // floor — never list below $19.99
+const SHIP_DEFAULT  = 8.50;
+let _cnyUsdRate = 0.138;
+
+async function fetchCnyRate() {
+  try {
+    const res = await fetch("https://open.er-api.com/v6/latest/CNY", { signal: AbortSignal.timeout(4000) });
+    const data = await res.json();
+    if (data?.rates?.USD) _cnyUsdRate = data.rates.USD;
+  } catch { /* use fallback */ }
+}
+
+function calcPricing(priceCNY) {
+  const landedCNY = priceCNY * (1 + OVERHEAD_PCT);
+  const landedUSD = landedCNY * _cnyUsdRate * (1 + BANK_FEE_PCT);
+  const covered   = landedUSD / (1 - EBAY_FEE_PCT);  // gross up for eBay fee
+  const ebayPrice = Math.max(
+    Math.ceil(covered * (1 + PROFIT_MARKUP) * 100) / 100,
+    MIN_PRICE
+  );
+  return {
+    landedCNY: Math.round(landedCNY * 100) / 100,
+    landedUSD: Math.round(landedUSD * 100) / 100,
+    ebayPrice,
+    shipping:  SHIP_DEFAULT,
+    rate:      _cnyUsdRate,
+  };
 }
 
 // ─── Fetch stores ─────────────────────────────────────────────────────────────
@@ -272,8 +304,6 @@ async function getProductFromTab() {
 // ─── State ────────────────────────────────────────────────────────────────────
 let currentProduct = null;
 let stores = [];
-const USD_RATE = 0.138;
-
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   const auth = await getAuth();
@@ -313,8 +343,8 @@ async function init() {
   }
 
   currentProduct = product;
-  const usdCost = product.priceCNY * USD_RATE;
-  const suggested = calcSuggestedPrice(usdCost);
+  await fetchCnyRate();
+  const pricing = calcPricing(product.priceCNY);
 
   // Image with fallback cycling
   const imgEl = document.getElementById("productImg");
@@ -327,9 +357,9 @@ async function init() {
   tryNextImg();
 
   document.getElementById("productTitle").textContent   = product.title;
-  document.getElementById("priceCNY").textContent       = `¥${product.priceCNY.toFixed(2)} CNY`;
-  document.getElementById("priceUSD").textContent       = `$${usdCost.toFixed(2)}`;
-  document.getElementById("priceSuggested").textContent = `→ eBay $${suggested}`;
+  document.getElementById("priceCNY").textContent       = `¥${product.priceCNY.toFixed(2)} → ¥${pricing.landedCNY.toFixed(2)} CNY`;
+  document.getElementById("priceUSD").textContent       = `$${pricing.landedUSD.toFixed(2)} cost`;
+  document.getElementById("priceSuggested").textContent = `→ eBay $${pricing.ebayPrice.toFixed(2)} + ship $${pricing.shipping.toFixed(2)}`;
   document.getElementById("productVariants").textContent =
     product.variantGroups?.length > 0
       ? product.variantGroups.map(g => `${g.name}: ${g.values.slice(0,4).map(v=>v.value).join(", ")}${g.values.length>4?"...":""}`).join(" · ")
@@ -380,8 +410,7 @@ document.getElementById("btnImport").addEventListener("click", async () => {
   const auth = await getAuth();
   const token = await getValidToken();
   if (!token) { await clearAuth(); showOnly("screenLogin"); return; }
-  const usdCost = currentProduct.priceCNY * USD_RATE;
-  const suggested = calcSuggestedPrice(usdCost);
+  const pricing = calcPricing(currentProduct.priceCNY);
   try {
     const res = await fetch(`${DROPFLOW_API}/api/dropflow/import-extension`, {
       method: "POST",
@@ -389,10 +418,12 @@ document.getElementById("btnImport").addEventListener("click", async () => {
       body: JSON.stringify({
         userId: auth.uid, storeId,
         title: currentProduct.title,
-        price: Math.round(usdCost*100)/100,
-        suggestedPrice: suggested,
-        shipping: usdCost < 5 ? 4.5 : usdCost < 15 ? 5.5 : 6.5,
-        cnyPrice: currentProduct.priceCNY,
+        price:          pricing.landedUSD,       // our cost in USD (after overhead + bank fee)
+        suggestedPrice: pricing.ebayPrice,       // eBay listing price (covers eBay 13.5% fee)
+        shipping:       pricing.shipping,        // carrier estimate ($8.50 default)
+        cnyPrice:       currentProduct.priceCNY,
+        landedCNY:      pricing.landedCNY,       // CNY with overhead (for records)
+        exchangeRate:   pricing.rate,            // rate used for transparency
         images: currentProduct.images,
         variants: currentProduct.variants,
         variantGroups: currentProduct.variantGroups ?? [],
