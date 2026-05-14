@@ -110,6 +110,10 @@ function extractProductData() {
       if (clean && !seen.has(clean) && images.length < 12) { images.push(clean); seen.add(clean); }
     }
 
+    // ── Check login status ───────────────────────────────────────────────────
+    // 1688 hides skuProps/variants behind login — FE_GLOBALS.loginId is null when not logged in
+    const is1688LoggedIn = window.FE_GLOBALS?.loginId != null;
+
     // ── PRIMARY: read from window.context (embedded JSON in page) ────────────
     // 1688 inlines ALL product data as window.context — far more reliable than DOM scraping
     const ctx = window.context?.result;
@@ -251,6 +255,7 @@ function extractProductData() {
       shopName,
       soldCount,
       sourceUrl: window.location.href,
+      is1688LoggedIn,
     };
   } catch(e) {
     return { title:"", priceCNY:0, images:[], variantGroups:[], variants:[], shopName:"", soldCount:0, sourceUrl: window.location.href, _err: e.message };
@@ -332,8 +337,14 @@ async function init() {
         ? `${product.variants.length} variants: ${product.variants.slice(0,3).join(", ")}${product.variants.length>3?"...":""}`
         : "No variants";
 
+  // Warn if not logged into 1688 — variants and extra images won't be available
+  const loginWarnEl = document.getElementById("warn1688Login");
+  if (loginWarnEl) {
+    loginWarnEl.style.display = product.is1688LoggedIn ? "none" : "flex";
+  }
+
   showOnly("screenProduct");
-  setStatus("Ready to import");
+  setStatus(product.is1688LoggedIn ? "Ready to import" : "⚠️ Log into 1688 for variants");
 }
 
 // ─── Event handlers ───────────────────────────────────────────────────────────

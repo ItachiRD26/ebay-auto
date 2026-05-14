@@ -170,7 +170,20 @@
       cursor: pointer;
     }
 
-    /* ── Footer ── */
+    .warn-login {
+      display: none;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      background: rgba(234, 179, 8, 0.1);
+      border: 1px solid rgba(234, 179, 8, 0.35);
+      border-radius: 7px;
+      color: #fde047;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .warn-login a { color: #fbbf24; font-weight: 600; }
+
     .footer {
       display: flex;
       justify-content: space-between;
@@ -246,6 +259,11 @@
     <div class="field">
       <label>Add to store</label>
       <select class="store-select" id="storeSelect"></select>
+    </div>
+
+    <div id="warn1688Login" class="warn-login">
+      ⚠️ <span>No estás logueado en 1688 — las variantes e imágenes extra no se cargarán.<br>
+      <a href="https://login.1688.com" target="_blank">Inicia sesión en 1688 ↗</a> y luego vuelve a importar.</span>
     </div>
 
     <div id="importError" class="error-msg" style="display:none"></div>
