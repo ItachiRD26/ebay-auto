@@ -384,9 +384,10 @@ function preFilterItem(
   const itemId    = item.itemId as string;
   const numericId = extractNumericId(itemId);
 
-  // Price
+  // Price — filter by totalMarketCost (price + shipping) because that's the real buyer cost.
+  // A $22 item with $8 shipping = $30 true cost; $22 < $25 min would incorrectly reject it.
   const pricing = calcPricing(item);
-  if (pricing.ebayRefPrice < minPrice || pricing.ebayRefPrice > maxPrice) return false;
+  if (pricing.totalMarketCost < minPrice || pricing.totalMarketCost > maxPrice) return false;
 
   // Banned keywords in title
   if (isBannedWith(title, excluded)) return false;
@@ -564,12 +565,16 @@ export async function POST(req: NextRequest) {
     console.log(`   Phase 1: ${candidates.length} candidates (rejected ${phase1Rejected} without API calls)`);
 
     // ── Phase 2: Deep evaluation for candidates only ─────────────────────────
-    // Reset per-keyword counters, keep keywords counter intact
+    // Reset per-search counters. active:true is required so the frontend polling
+    // (which checks if (data.active)) actually renders the progress bar.
     updateProgress(userId, {
-      keyword: kw,
+      active:   true,
+      keyword:  kw,
       reviewed: allItems.length,  // show total scanned (phase1 + phase2) immediately
-      passed: 0,
-      phase2: { reviewed: 0, total: candidates.length },
+      passed:   0,
+      phase2:   { reviewed: 0, total: candidates.length },
+      // Reset skip reasons per search so numbers reflect this keyword only
+      skipReasons: { price: 0, banned: 0, country: 0, sales: 0, duplicate: 0, condition: 0 },
     });
 
     let totalAdded    = 0;

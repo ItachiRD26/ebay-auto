@@ -7,7 +7,13 @@ export async function PATCH(req: NextRequest) {
     if (!productId || !updates) return NextResponse.json({ error: "productId and updates required" }, { status: 400 });
     if (!userId) return NextResponse.json({ error: "userId required" }, { status: 400 });
 
-    const allowed = ["status", "suggestedSellingPrice", "markupPercent", "description", "stock", "eproloPrice", "eproloUrl", "margin", "marginPercent"];
+    const allowed = [
+      // NOTE: "title", "categoryId", "failReason" added so card edits actually persist.
+      // Previously they were silently dropped — publish used the stale original values.
+      "status", "suggestedSellingPrice", "markupPercent", "description",
+      "stock", "eproloPrice", "eproloUrl", "margin", "marginPercent",
+      "title", "categoryId", "failReason",
+    ];
     const safeUpdates: Record<string, unknown> = { updatedAt: Date.now() };
     for (const key of allowed) {
       if (key in updates) safeUpdates[key] = updates[key];

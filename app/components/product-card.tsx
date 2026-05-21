@@ -67,9 +67,15 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product.suggestedSellingPrice, product.markupPercent, product.description, product.stock]);
 
-  // Live preview prices based on current slider value
-  const myMinPrice = +((refMin || product.totalMarketCost || 0) * (1 + markupPct / 100)).toFixed(2);
-  const myMaxPrice = isVariation ? +(refMax * (1 + markupPct / 100)).toFixed(2) : myMinPrice;
+  // Live preview prices based on current slider value.
+  // IMPORTANT: use totalMarketCost (base price + shipping) as the markup base, not refMin alone.
+  // The reference seller may charge shipping; since OUR listing is free shipping we must
+  // price from the buyer's true cost (totalMarketCost), not just the item price.
+  const totalBase  = product.totalMarketCost || refMin || 0;
+  const myMinPrice = +(totalBase * (1 + markupPct / 100)).toFixed(2);
+  const myMaxPrice = isVariation
+    ? +(refMax * (totalBase > 0 && refMin > 0 ? totalBase / refMin : 1) * (1 + markupPct / 100)).toFixed(2)
+    : myMinPrice;
 
   // ── Non-variation pricing (kept for editing single-price products) ─────────
   const sellingPrice = parseFloat(price) || 0;
@@ -141,7 +147,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
     try {
       const sellingPriceVal = parseFloat(price) || product.suggestedSellingPrice;
       const stockVal = parseInt(stock) || product.stock || 10;
-      const base = refMin || product.totalMarketCost || 0;
+      const base = product.totalMarketCost || refMin || 0;
       const newMarkup = base > 0 ? Math.round(((sellingPriceVal / base) - 1) * 100) : (product.markupPercent ?? 6);
 
       // One single PATCH with all fields — avoids race conditions from multiple calls
@@ -191,7 +197,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
   };
 
   const saveMarkup = (pct: number) => {
-    const base = refMin || product.totalMarketCost || product.ebayReferencePrice || 0;
+    const base = product.totalMarketCost || refMin || product.ebayReferencePrice || 0;
     onUpdate({
       markupPercent: pct,
       suggestedSellingPrice: +(base * (1 + pct / 100)).toFixed(2),
@@ -254,11 +260,19 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
             <div className="price-item">
               <span className="price-label">Ref. eBay</span>
               <span className="price-value ref">
-                ${refMin.toFixed(2)}
+                {/* Show totalMarketCost (price + shipping) — this is the REAL buyer cost
+                    that our free-shipping listing needs to beat/match. */}
+                ${(product.totalMarketCost || refMin).toFixed(2)}
                 {isVariation && (
-                  <span style={{ fontSize: "0.8rem", color: "#64748b" }}> – ${refMax.toFixed(2)}</span>
+                  <span style={{ fontSize: "0.8rem", color: "#64748b" }}> – ${(refMax + (product.ebayShippingCost ?? 0)).toFixed(2)}</span>
                 )}
               </span>
+              {/* Shipping breakdown: show when ref seller charges shipping */}
+              {(product.ebayShippingCost ?? 0) > 0 && (
+                <span style={{ fontSize: "0.62rem", color: "#94a3b8", marginTop: "0.1rem" }}>
+                  ${refMin.toFixed(2)} + ${(product.ebayShippingCost ?? 0).toFixed(2)} envío
+                </span>
+              )}
             </div>
             <div className="price-item">
               <span className="price-label">{isVariation ? "Tu rango" : "Tu precio"}</span>
@@ -302,7 +316,7 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                       onBlur={() => {
                         const v = parseFloat(price);
                         if (!isNaN(v) && v > 0) {
-                          const base = refMin || product.totalMarketCost || 0;
+                          const base = product.totalMarketCost || refMin || 0;
                           const newMarkup = base > 0 ? Math.round(((v / base) - 1) * 100) : (product.markupPercent ?? 6);
                           setMarkupPct(newMarkup);
                           onUpdate({ suggestedSellingPrice: v, markupPercent: newMarkup });
@@ -564,11 +578,19 @@ export default function ProductCard({ product, onApprove, onReject, onPublish, o
                   ) : (
                     // 💾 Guardar solo — guarda los edits sin publicar
                     <button className="btn btn-save" onClick={async () => {
+                      const priceVal = parseFloat(price) || product.suggestedSellingPrice;
+                      // Recalculate markupPercent so it stays consistent with the edited price.
+                      // Without this, variation prices diverge from the saved absolute price.
+                      const _base = product.totalMarketCost || refMin || 0;
+                      const _markup = _base > 0
+                        ? Math.round(((priceVal / _base) - 1) * 100)
+                        : (product.markupPercent ?? 6);
                       const updates: Record<string, unknown> = {
-                        title: (editTitle || product.title).slice(0, 80),
+                        title:                 (editTitle || product.title).slice(0, 80),
                         description,
-                        suggestedSellingPrice: parseFloat(price) || product.suggestedSellingPrice,
-                        stock: parseInt(stock) || product.stock || 10,
+                        suggestedSellingPrice: priceVal,
+                        markupPercent:         _markup,
+                        stock:                 parseInt(stock) || product.stock || 10,
                       };
                       if (editCategoryId && editCategoryId !== product.categoryId) updates.categoryId = editCategoryId;
                       onUpdate(updates as Parameters<typeof onUpdate>[0]);

@@ -244,19 +244,16 @@ export default function Dashboard() {
         if (data.active) {
           setSearchProgress(p => {
             if (!p) return p;
-            const sp = p as unknown as Record<string, unknown>;
-            const kwBase     = (sp._kwBase     as number) ?? 0;
-            const lastPassed = (sp._lastPassed as number) ?? 0;
-            const serverPassed = data.passed ?? 0;
-            const newKwBase  = serverPassed < lastPassed ? kwBase + lastPassed : kwBase;
+            // Show stats for the CURRENT search (current keyword) directly from server.
+            // The keywords.done counter already shows overall progress across all keywords.
+            // We do NOT accumulate 'passed' across keywords here — each keyword's result
+            // is shown fresh, giving clearer per-search feedback.
             return {
               ...p,
               reviewed:    data.reviewed    ?? p.reviewed,
-              passed:      newKwBase + serverPassed,
+              passed:      data.passed      ?? p.passed,
               phase2:      data.phase2      ?? p.phase2,
               skipReasons: data.skipReasons ?? p.skipReasons,
-              _kwBase:     newKwBase,
-              _lastPassed: serverPassed,
             } as typeof p;
           });
         }
@@ -367,7 +364,7 @@ export default function Dashboard() {
         const kwRes = await fetch(`/api/ebay/search?userId=${uid}`);
         const { keywords: allKws } = await kwRes.json() as { keywords: string[] };
         const reversed = [...allKws].reverse();
-        setSearchProgress({ reviewed: 0, passed: 0, keyword: reversed[startIndex] ?? "", keywords: { done: startIndex, total: reversed.length }, phase2: { reviewed: 0, total: 0 }, _kwBase: 0, _lastPassed: 0 } as unknown as typeof searchProgress);
+        setSearchProgress({ reviewed: 0, passed: 0, keyword: reversed[startIndex] ?? "", keywords: { done: startIndex, total: reversed.length }, phase2: { reviewed: 0, total: 0 }} as unknown as typeof searchProgress);
         for (let i = startIndex; i < reversed.length; i++) {
           const kw = reversed[i];
           currentSearchRef.current = { index: i, keyword: kw, total: reversed.length, storeId: selectedStoreId };
@@ -401,7 +398,7 @@ export default function Dashboard() {
         currentSearchRef.current = null;
       } else if (searchMode === "keyword") {
         if (!kwInput.trim()) { toast("Type a keyword first", "err"); return; }
-        setSearchProgress({ reviewed: 0, passed: 0, keyword: kwInput.trim(), keywords: { done: 0, total: 1 }, phase2: { reviewed: 0, total: 0 }, _kwBase: 0, _lastPassed: 0 } as unknown as typeof searchProgress);
+        setSearchProgress({ reviewed: 0, passed: 0, keyword: kwInput.trim(), keywords: { done: 0, total: 1 }, phase2: { reviewed: 0, total: 0 }} as unknown as typeof searchProgress);
         const sr = await fetch("/api/ebay/search", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ keywords: kwInput.trim(), storeId: selectedStoreId, userId: uid }),
@@ -850,26 +847,27 @@ export default function Dashboard() {
                     {searchProgress.keywords.total > 1 && <span>📋 <strong style={{ color: "var(--text)" }}>{searchProgress.keywords.done}/{searchProgress.keywords.total}</strong></span>}
                     {searchProgress.keyword && <span>🔍 <strong style={{ color: "var(--text)" }}>&quot;{searchProgress.keyword}&quot;</strong></span>}
                     {(searchProgress.reviewed > 0 || ((searchProgress as unknown as {phase2?:{total:number}}).phase2?.total ?? 0) > 0) && (
-                      <span>👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed.toLocaleString()}</strong></span>
+                      <span title="Ítems escaneados en esta búsqueda">👁 <strong style={{ color: "var(--text)" }}>{searchProgress.reviewed.toLocaleString()}</strong></span>
                     )}
                     {(() => {
                       const p2 = (searchProgress as unknown as {phase2?:{reviewed:number;total:number}}).phase2;
                       if (!p2 || p2.total === 0) return null;
-                      return <span style={{ color: "var(--blue)", fontSize: "0.75rem" }}>↳ candidatos <strong style={{ color: "var(--text)" }}>{p2.reviewed}/{p2.total}</strong></span>;
+                      return <span style={{ color: "var(--blue)", fontSize: "0.75rem" }}>↳ <strong style={{ color: "var(--text)" }}>{p2.reviewed}/{p2.total}</strong> candidatos</span>;
                     })()}
-                    <span style={{ color: "var(--green)" }}>✅ <strong>{searchProgress.passed}</strong> añadidos</span>
+                    {/* passed = añadidos en esta búsqueda (se resetea por keyword) */}
+                    <span style={{ color: "var(--green)" }}>✅ <strong>{searchProgress.passed}</strong> esta búsqueda</span>
                     {(searchProgress as unknown as Record<string,unknown>).skipReasons && (() => {
                       const sr = ((searchProgress as unknown as Record<string, Record<string,number>>).skipReasons);
                       return <>
-                        {sr.sales    > 0 && <span style={{ color: "var(--amber)" }}>📉 {sr.sales}</span>}
-                        {sr.price    > 0 && <span style={{ color: "var(--text3)" }}>💰 {sr.price}</span>}
-                        {sr.banned   > 0 && <span style={{ color: "var(--red)" }}>🚫 {sr.banned}</span>}
-                        {sr.country  > 0 && <span style={{ color: "var(--text3)" }}>🌍 {sr.country}</span>}
-                        {sr.duplicate > 0 && <span style={{ color: "var(--text3)" }}>♻ {sr.duplicate}</span>}
+                        {sr.sales    > 0 && <span style={{ color: "var(--amber)" }} title="Rechazados por ventas insuficientes">📉 {sr.sales}</span>}
+                        {sr.price    > 0 && <span style={{ color: "var(--text3)" }} title="Rechazados por precio fuera de rango">💰 {sr.price}</span>}
+                        {sr.banned   > 0 && <span style={{ color: "var(--red)" }} title="Rechazados por keyword excluido">🚫 {sr.banned}</span>}
+                        {sr.country  > 0 && <span style={{ color: "var(--text3)" }} title="Rechazados por no ser China/HK/TW">🌍 {sr.country}</span>}
+                        {sr.duplicate > 0 && <span style={{ color: "var(--text3)" }} title="Ya en cola">♻ {sr.duplicate}</span>}
                       </>;
                     })()}
                   </>
-                ) : <span>Starting...</span>}
+                ) : <span>Iniciando...</span>}
               </div>
               {searchMode !== "1688" && (
                 <button onClick={() => { const next = !paused; setPaused(next); pauseRef.current = next; }}
